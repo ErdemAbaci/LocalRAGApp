@@ -1,0 +1,7 @@
+RAG, Retrieval-Augmented Generation anlamına gelir. RAG sistemlerinde önce ilgili bilgi dokümanlardan bulunur, sonra bu bilgi LLM'e context olarak verilir.
+
+Embedding, metinlerin sayısal vektörlere dönüştürülmüş halidir. Benzer anlamdaki metinlerin embedding değerleri birbirine yakın olur.
+
+SQLite, yerel ve hafif bir veritabanıdır. Sunucu gerektirmez ve küçük local uygulamalar için uygundur.
+
+Foundry Local, cihaz üzerinde local LLM çalıştırmayı sağlar. Böylece uygulama cloud servisine gitmeden cevap üretebilir.
