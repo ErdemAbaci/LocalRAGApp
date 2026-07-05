@@ -6,9 +6,21 @@ from app.database import get_all_chunks
 
 MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
+_embedding_model = None
+
+
+def get_embedding_model():
+    global _embedding_model
+
+    if _embedding_model is None:
+        print("Embedding modeli yükleniyor...")
+        _embedding_model = SentenceTransformer(MODEL_NAME)
+
+    return _embedding_model
+
 
 def get_top_chunks(question, top_k=3):
-    model = SentenceTransformer(MODEL_NAME)
+    model = get_embedding_model()
 
     chunks = get_all_chunks()
 

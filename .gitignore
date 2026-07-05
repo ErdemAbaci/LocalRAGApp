@@ -20,3 +20,4 @@ __pycache__/
 *.sqlite3
 data/
 !data/.gitkeep
+INSTRUCTIONS.md
