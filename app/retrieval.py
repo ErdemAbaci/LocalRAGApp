@@ -1,49 +1,54 @@
-from sentence_transformers import SentenceTransformer
+import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 from app.database import get_all_chunks
-
-
-MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-_embedding_model = None
-
-
-def get_embedding_model():
-    global _embedding_model
-
-    if _embedding_model is None:
-        print("Embedding modeli yükleniyor...")
-        _embedding_model = SentenceTransformer(MODEL_NAME)
-
-    return _embedding_model
+from app.embeddings import embed_texts
 
 
 def get_top_chunks(question, top_k=3):
-    model = get_embedding_model()
-
     chunks = get_all_chunks()
 
     if not chunks:
         return []
 
-    question_embedding = model.encode([question])
+    question_embedding = np.asarray(embed_texts([question]), dtype=np.float32)
+
+    if not np.isfinite(question_embedding).all():
+        return []
 
     chunk_embeddings = []
+    valid_chunks = []
 
     for chunk in chunks:
-        chunk_embeddings.append(chunk["embedding"])
+        embedding = np.asarray(chunk["embedding"], dtype=np.float32)
 
+        if embedding.ndim != 1:
+            continue
+
+        if not np.isfinite(embedding).all():
+            continue
+
+        chunk_embeddings.append(embedding)
+        valid_chunks.append(chunk)
+
+    if not chunk_embeddings:
+        return []
+
+    chunk_embeddings = np.vstack(chunk_embeddings)
     similarities = cosine_similarity(question_embedding, chunk_embeddings)[0]
+    similarities = np.nan_to_num(similarities, nan=-1.0, posinf=-1.0, neginf=-1.0)
 
     results = []
 
     for index, score in enumerate(similarities):
-        chunk = chunks[index]
+        chunk = valid_chunks[index]
 
         results.append({
             "id": chunk["id"],
             "source_name": chunk["source_name"],
+            "source_type": chunk["source_type"],
+            "page_number": chunk["page_number"],
+            "chunk_index": chunk["chunk_index"],
             "chunk_text": chunk["chunk_text"],
             "score": float(score)
         })

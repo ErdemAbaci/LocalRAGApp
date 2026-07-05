@@ -1,9 +1,11 @@
 import time
 
+from app.database import get_chunk_stats
+from app.embeddings import MODEL_NAME as EMBEDDING_MODEL_NAME
 from app.retrieval import get_top_chunks
 from app.prompts import build_rag_messages
-from app.llm import LocalLLM
-from app.ingest import ingest_documents
+from app.llm import LocalLLM, MODEL_ALIAS
+from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, ingest_documents
 
 SIMILARITY_THRESHOLD = 0.20
 CONTEXT_SCORE_THRESHOLD = 0.35
@@ -26,15 +28,64 @@ def get_llm():
     return _llm
 
 
+def print_banner():
+    print()
+    print("==================================================")
+    print("Local RAG Assistant")
+    print("Yerel doküman soru-cevap asistanı")
+    print("==================================================")
+    print(f"Embedding: {EMBEDDING_MODEL_NAME}")
+    print(f"LLM: {MODEL_ALIAS} (gerektiğinde yüklenir)")
+    print("Docs: docs/")
+    print("Database: data/rag.db")
+    print()
+    print("Komutlar: /help, /stats, /reindex, /debug on, /debug off, /exit")
+
+
+def print_help():
+    print("\nKomutlar:")
+    print("- /help       Komut listesini gösterir")
+    print("- /stats      Index ve model bilgilerini gösterir")
+    print("- /reindex    docs/ klasörünü yeniden indexler")
+    print("- /debug on   Debug çıktısını açar")
+    print("- /debug off  Debug çıktısını kapatır")
+    print("- /exit       Uygulamadan çıkar")
+    print("\nNormal soru sormak için doğrudan yazman yeterli.")
+
+
+def print_stats():
+    stats = get_chunk_stats()
+
+    print("\nSistem durumu:")
+    print(f"- chunk sayısı: {stats['total_chunks']}")
+    print(f"- kaynak dosya sayısı: {stats['source_count']}")
+    print(f"- veritabanı: {stats['db_path']}")
+    print(f"- embedding modeli: {EMBEDDING_MODEL_NAME}")
+    print(f"- llm modeli: {MODEL_ALIAS}")
+    print(f"- debug: {'açık' if DEBUG else 'kapalı'}")
+    print(f"- top_k: {TOP_K}")
+    print(f"- chunk size: {CHUNK_SIZE}")
+    print(f"- chunk overlap: {CHUNK_OVERLAP}")
+    print(f"- similarity threshold: {SIMILARITY_THRESHOLD}")
+    print(f"- context score threshold: {CONTEXT_SCORE_THRESHOLD}")
+
+
 def print_sources(chunks):
     print("\nKaynaklar:")
 
     for chunk in chunks:
-        print(
-            f"- {chunk['source_name']} | "
-            f"chunk_id={chunk['id']} | "
-            f"score={chunk['score']:.4f}"
-        )
+        source_parts = [chunk["source_name"]]
+
+        if chunk.get("page_number") is not None:
+            source_parts.append(f"page={chunk['page_number']}")
+
+        if chunk.get("chunk_index") is not None:
+            source_parts.append(f"chunk_index={chunk['chunk_index']}")
+
+        source_parts.append(f"chunk_id={chunk['id']}")
+        source_parts.append(f"score={chunk['score']:.4f}")
+
+        print("- " + " | ".join(source_parts))
 
 def print_debug_info(question, chunks, messages):
     print("\n--- DEBUG MODE ---")
@@ -78,18 +129,59 @@ def should_use_extractive_answer(context_chunks):
     return True
 
 
-def main():
-    while True:
-        question = input("\nSoru sor: ")
+def handle_command(command):
+    global DEBUG
 
-        if question.lower() in ["q", "quit", "exit"]:
+    if command in ["/exit", "/quit", "q", "quit", "exit"]:
+        return "exit"
+
+    if command == "/help":
+        print_help()
+        return "handled"
+
+    if command == "/stats":
+        print_stats()
+        return "handled"
+
+    if command == "/reindex":
+        print("\nRe-index başlatılıyor...")
+        ingest_documents()
+        print("Re-index tamamlandı.")
+        return "handled"
+
+    if command == "/debug on":
+        DEBUG = True
+        print("\nDebug modu açıldı.")
+        return "handled"
+
+    if command == "/debug off":
+        DEBUG = False
+        print("\nDebug modu kapatıldı.")
+        return "handled"
+
+    if command.startswith("/"):
+        print("\nBilinmeyen komut. Komutları görmek için /help yaz.")
+        return "handled"
+
+    return None
+
+
+def main():
+    print_banner()
+
+    while True:
+        question = input("\nrag> ").strip()
+
+        if not question:
+            continue
+
+        command_result = handle_command(question.lower())
+
+        if command_result == "exit":
             break
-        
-        if question.lower() == "/reindex":
-          print("\nRe-index başlatılıyor...")
-          ingest_documents()
-          print("Re-index tamamlandı.")
-          continue
+
+        if command_result == "handled":
+            continue
         
         total_start_time = time.perf_counter()
 

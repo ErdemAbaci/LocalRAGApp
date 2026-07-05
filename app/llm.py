@@ -1,36 +1,70 @@
+import re
+
 import openai
 from foundry_local import FoundryLocalManager
 
 
 MODEL_ALIAS = "phi-3.5-mini"
 
+ANSWER_STOP_MARKERS = [
+    "Kaynak:",
+    "kaynak:",
+    "KAYNAK:",
+    "Source:",
+    "source:"
+]
+
+ANSWER_PREFIXES = [
+    "Cevap:",
+    "cevap:",
+    "Answer:",
+    "answer:"
+]
+
+CITATION_PATTERN = r"\[(?:Parça|parça|Parca|parca)[^\]]*\]"
+
+
+def remove_answer_prefix(text):
+    cleaned = text.strip()
+
+    prefix_removed = True
+
+    while prefix_removed:
+        prefix_removed = False
+
+        for prefix in ANSWER_PREFIXES:
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+                prefix_removed = True
+
+    return cleaned
+
 
 def clean_answer(answer):
-    cleaned = answer.strip()
-
-    prefixes = [
-        "Cevap:",
-        "cevap:",
-        "Answer:",
-        "answer:"
-    ]
-
-    for prefix in prefixes:
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix):].strip()
-
-    lines = cleaned.splitlines()
+    original_answer = answer.strip()
     filtered_lines = []
 
-    for line in lines:
-        stripped = line.strip()
+    for line in original_answer.splitlines():
+        stripped = remove_answer_prefix(line)
 
-        if stripped.lower().startswith("kaynak:"):
+        if not stripped:
             continue
 
-        filtered_lines.append(line)
+        if stripped.lower().startswith(("kaynak:", "source:")):
+            continue
 
-    return "\n".join(filtered_lines).strip()
+        filtered_lines.append(stripped)
+
+    cleaned = "\n".join(filtered_lines).strip()
+    cleaned = re.sub(CITATION_PATTERN, "", cleaned).strip()
+
+    for marker in ANSWER_STOP_MARKERS:
+        marker_index = cleaned.find(marker)
+
+        if marker_index > 0:
+            cleaned = cleaned[:marker_index].strip()
+
+    return cleaned or original_answer
 
 
 class LocalLLM:
@@ -50,7 +84,8 @@ class LocalLLM:
         response = self.client.chat.completions.create(
             model=self.model_info.id,
             messages=messages,
-            temperature=0.1
+            temperature=0.1,
+            max_tokens=220
         )
 
         raw_answer = response.choices[0].message.content
