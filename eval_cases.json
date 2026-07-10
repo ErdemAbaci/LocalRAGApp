@@ -1,0 +1,29 @@
+[
+  {
+    "name": "rag_definition",
+    "question": "RAG nedir?",
+    "expectation": "relevant",
+    "expected_source": "example.txt",
+    "min_score": 0.40
+  },
+  {
+    "name": "embedding_definition",
+    "question": "Embedding nedir?",
+    "expectation": "relevant",
+    "expected_source": "example.txt",
+    "min_score": 0.40
+  },
+  {
+    "name": "data_mining_process",
+    "question": "Veri madenciliği süreçleri nedir?",
+    "expectation": "relevant",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.40
+  },
+  {
+    "name": "out_of_scope_weather",
+    "question": "Hava nasıl?",
+    "expectation": "not_found",
+    "max_score": 0.20
+  }
+]

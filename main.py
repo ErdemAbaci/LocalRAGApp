@@ -1,5 +1,13 @@
 import time
 
+from app.config import (
+    CONTEXT_SCORE_THRESHOLD,
+    EXTRACTIVE_SCORE_THRESHOLD,
+    MAX_EXTRACTIVE_CHARS,
+    SIMILARITY_THRESHOLD,
+    TOP_K,
+    USE_EXTRACTIVE_FALLBACK,
+)
 from app.database import get_chunk_stats
 from app.embeddings import MODEL_NAME as EMBEDDING_MODEL_NAME
 from app.retrieval import get_top_chunks
@@ -7,14 +15,7 @@ from app.prompts import build_rag_messages
 from app.llm import LocalLLM, MODEL_ALIAS
 from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, ingest_documents
 
-SIMILARITY_THRESHOLD = 0.20
-CONTEXT_SCORE_THRESHOLD = 0.35
-TOP_K = 3
 DEBUG = False
-
-USE_EXTRACTIVE_FALLBACK = True
-EXTRACTIVE_SCORE_THRESHOLD = 0.50
-MAX_EXTRACTIVE_CHARS = 500
 
 _llm = None
 
