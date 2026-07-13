@@ -259,9 +259,11 @@ class SourcesCommandTests(unittest.TestCase):
         output = buffer.getvalue()
 
         self.assertEqual(result, "handled")
-        self.assertIn("İndeksteki kaynaklar:", output)
-        self.assertIn("example.txt | tür=txt | sayfa=- | chunk=1", output)
-        self.assertIn("guide.pdf | tür=pdf | sayfa=1 | chunk=1", output)
+        self.assertIn("İndeksteki kaynaklar", output)
+        self.assertIn("example.txt", output)
+        self.assertIn("guide.pdf", output)
+        self.assertIn("txt", output)
+        self.assertIn("pdf", output)
         self.assertIn("Toplam: 2 dosya, 2 chunk", output)
 
 

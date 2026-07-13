@@ -23,7 +23,11 @@ ANSWER_PREFIXES = [
     "answer:"
 ]
 
-CITATION_PATTERN = r"\[(?:Parça|parça|Parca|parca)[^\]]*\]"
+CITATION_BODY_PATTERN = (
+    r"(?:Parça|Parca)\s+\d+"
+    r"(?:(?:\s*[-–,]\s*|\s+ve\s+)(?:(?:Parça|Parca)\s+)?\d+)*"
+)
+CITATION_PATTERN = rf"(?:\[{CITATION_BODY_PATTERN}\]|\({CITATION_BODY_PATTERN}\))"
 
 
 def remove_answer_prefix(text):
@@ -42,6 +46,14 @@ def remove_answer_prefix(text):
     return cleaned
 
 
+def remove_citations(text):
+    cleaned = re.sub(CITATION_PATTERN, "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def clean_answer(answer):
     original_answer = answer.strip()
     filtered_lines = []
@@ -58,7 +70,7 @@ def clean_answer(answer):
         filtered_lines.append(stripped)
 
     cleaned = "\n".join(filtered_lines).strip()
-    cleaned = re.sub(CITATION_PATTERN, "", cleaned).strip()
+    cleaned = remove_citations(cleaned)
 
     for marker in ANSWER_STOP_MARKERS:
         marker_index = cleaned.find(marker)
@@ -81,7 +93,7 @@ def is_valid_answer(answer):
     if cleaned.lower().startswith(("kaynak:", "source:")):
         return False
 
-    without_citations = re.sub(CITATION_PATTERN, "", cleaned).strip()
+    without_citations = remove_citations(cleaned)
     without_prefix = remove_answer_prefix(without_citations)
 
     return len(without_prefix) >= MIN_GENERATIVE_ANSWER_CHARS
@@ -89,10 +101,8 @@ def is_valid_answer(answer):
 
 class LocalLLM:
     def __init__(self):
-        print("Foundry Local başlatılıyor...")
         self.manager = FoundryLocalManager()
 
-        print(f"Model yükleniyor: {MODEL_ALIAS}")
         self.model_info = self.manager.load_model(MODEL_ALIAS)
 
         self.client = openai.OpenAI(

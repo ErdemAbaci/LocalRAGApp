@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 
@@ -11,6 +12,14 @@ DOCS_DIR = Path("docs")
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)")
+
+
+class IgnoredPdfObjectFilter(logging.Filter):
+    def filter(self, record):
+        return not record.getMessage().startswith("Ignoring wrong pointing object")
+
+
+logging.getLogger("pypdf._reader").addFilter(IgnoredPdfObjectFilter())
 
 
 def read_txt_file(file_path):
@@ -173,4 +182,4 @@ def ingest_documents():
         raise ValueError("İndekslenecek metin bulunamadı; mevcut indeks korundu.")
 
     replace_chunks(indexed_chunks)
-    print(f"Ingestion tamamlandı. Toplam chunk sayısı: {len(indexed_chunks)}")
+    return len(indexed_chunks)

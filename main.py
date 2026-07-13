@@ -1,5 +1,18 @@
 import time
 
+from app.cli_output import (
+    activity,
+    console,
+    print_answer,
+    print_banner as render_banner,
+    print_health_report,
+    print_info,
+    print_issue,
+    print_performance,
+    print_success,
+    print_table,
+    read_prompt,
+)
 from app.config import (
     CONTEXT_SCORE_THRESHOLD,
     EXTRACTIVE_SCORE_THRESHOLD,
@@ -31,143 +44,137 @@ def get_llm():
 
 
 def print_banner():
-    print()
-    print("==================================================")
-    print("Local RAG Assistant")
-    print("Yerel doküman soru-cevap asistanı")
-    print("==================================================")
-    print(f"Embedding: {EMBEDDING_MODEL_NAME}")
-    print(f"LLM: {MODEL_ALIAS} (gerektiğinde yüklenir)")
-    print("Docs: docs/")
-    print("Database: data/rag.db")
-    print()
-    print("Komutlar: /help, /stats, /sources, /doctor, /reindex, /debug on, /debug off, /exit")
+    render_banner(EMBEDDING_MODEL_NAME, MODEL_ALIAS)
 
 
 def print_help():
-    print("\nKomutlar:")
-    print("- /help       Komut listesini gösterir")
-    print("- /stats      Index ve model bilgilerini gösterir")
-    print("- /sources    İndeksteki dosya, tür, sayfa ve chunk sayılarını gösterir")
-    print("- /doctor     Sistem bileşenlerinin sağlık durumunu kontrol eder")
-    print("- /reindex    docs/ klasörünü yeniden indexler")
-    print("- /debug on   Debug çıktısını açar")
-    print("- /debug off  Debug çıktısını kapatır")
-    print("- /exit       Uygulamadan çıkar")
-    print("\nNormal soru sormak için doğrudan yazman yeterli.")
+    print_table(
+        "Komutlar",
+        [("Komut", "bold cyan", "left", True), ("Açıklama",)],
+        [
+            ("/help", "Komut listesini gösterir"),
+            ("/stats", "İndeks, model ve eşik bilgilerini gösterir"),
+            ("/sources", "İndeksteki dosya, sayfa ve chunk sayılarını gösterir"),
+            ("/doctor", "Sistem bileşenlerinin sağlık durumunu kontrol eder"),
+            ("/reindex", "docs/ klasörünü yeniden indeksler"),
+            ("/debug on", "Teknik debug çıktısını açar"),
+            ("/debug off", "Teknik debug çıktısını kapatır"),
+            ("/exit", "Uygulamadan çıkar"),
+        ],
+        footer="Normal soru sormak için doğrudan yazman yeterli.",
+    )
 
 
 def print_stats():
     stats = get_chunk_stats()
+    short_embedding_name = EMBEDDING_MODEL_NAME.rsplit("/", maxsplit=1)[-1]
 
-    print("\nSistem durumu:")
-    print(f"- chunk sayısı: {stats['total_chunks']}")
-    print(f"- kaynak dosya sayısı: {stats['source_count']}")
-    print(f"- veritabanı: {stats['db_path']}")
-    print(f"- embedding modeli: {EMBEDDING_MODEL_NAME}")
-    print(f"- llm modeli: {MODEL_ALIAS}")
-    print(f"- debug: {'açık' if DEBUG else 'kapalı'}")
-    print(f"- top_k: {TOP_K}")
-    print(f"- chunk size: {CHUNK_SIZE}")
-    print(f"- chunk overlap: {CHUNK_OVERLAP}")
-    print(f"- similarity threshold: {SIMILARITY_THRESHOLD}")
-    print(f"- context score threshold: {CONTEXT_SCORE_THRESHOLD}")
+    print_table(
+        "Sistem durumu",
+        [("Ayar", "bold"), ("Değer", "cyan")],
+        [
+            ("Chunk sayısı", stats["total_chunks"]),
+            ("Kaynak dosya", stats["source_count"]),
+            ("Veritabanı", stats["db_path"]),
+            ("Embedding", short_embedding_name),
+            ("LLM", MODEL_ALIAS),
+            ("Debug", "açık" if DEBUG else "kapalı"),
+            ("Top K", TOP_K),
+            ("Chunk size / overlap", f"{CHUNK_SIZE} / {CHUNK_OVERLAP}"),
+            ("Similarity threshold", SIMILARITY_THRESHOLD),
+            ("Context threshold", CONTEXT_SCORE_THRESHOLD),
+        ],
+    )
 
 
 def print_indexed_sources():
     sources = get_indexed_sources()
 
     if not sources:
-        print("\nİndekste kaynak dosya yok. Önce /reindex çalıştır.")
+        print_issue(
+            "warning",
+            "İndekste kaynak dosya yok.",
+            solution="/reindex çalıştır.",
+        )
         return
 
     total_chunks = sum(source["chunk_count"] for source in sources)
 
-    print("\nİndeksteki kaynaklar:")
-
+    rows = []
     for source in sources:
         source_type = source["source_type"] or "bilinmiyor"
         page_count = source["page_count"]
-
-        if page_count > 0:
-            page_label = str(page_count)
-        else:
-            page_label = "-"
-
-        print(
-            f"- {source['source_name']} | tür={source_type} | "
-            f"sayfa={page_label} | chunk={source['chunk_count']}"
+        rows.append(
+            (
+                source["source_name"],
+                source_type,
+                page_count if page_count > 0 else "-",
+                source["chunk_count"],
+            )
         )
 
-    print(f"\nToplam: {len(sources)} dosya, {total_chunks} chunk")
+    print_table(
+        "İndeksteki kaynaklar",
+        [
+            ("Dosya", "bold"),
+            ("Tür", "cyan", "left", True),
+            ("Sayfa", None, "right", True),
+            ("Chunk", None, "right", True),
+        ],
+        rows,
+        footer=f"Toplam: {len(sources)} dosya, {total_chunks} chunk",
+    )
 
 
 def print_doctor_report():
     checks = run_health_checks()
-    status_labels = {
-        "ok": "OK",
-        "warning": "UYARI",
-        "error": "HATA",
-    }
-
-    print("\nSistem kontrolü:")
-
-    for check in checks:
-        label = status_labels[check.status]
-        print(f"[{label}] {check.name}: {check.message}")
-
-        if check.solution:
-            print(f"        Çözüm: {check.solution}")
-
-    ok_count = sum(check.status == "ok" for check in checks)
-    warning_count = sum(check.status == "warning" for check in checks)
-    error_count = sum(check.status == "error" for check in checks)
-
-    print(
-        f"\nSonuç: {ok_count} başarılı, "
-        f"{warning_count} uyarı, {error_count} hata"
-    )
+    print_health_report(checks)
 
 
 def print_sources(chunks):
-    print("\nKaynaklar:")
-
+    rows = []
     for chunk in chunks:
-        source_parts = [chunk["source_name"]]
+        rows.append(
+            (
+                chunk["source_name"],
+                chunk.get("page_number") if chunk.get("page_number") is not None else "-",
+                chunk.get("chunk_index") if chunk.get("chunk_index") is not None else "-",
+                chunk["id"],
+                f"{chunk['score']:.4f}",
+            )
+        )
 
-        if chunk.get("page_number") is not None:
-            source_parts.append(f"page={chunk['page_number']}")
+    print_table(
+        "Kaynaklar",
+        [
+            ("Dosya", "bold"),
+            ("Sayfa", None, "right", True),
+            ("Parça", None, "right", True),
+            ("ID", "dim", "right", True),
+            ("Skor", "cyan", "right", True),
+        ],
+        rows,
+    )
 
-        if chunk.get("chunk_index") is not None:
-            source_parts.append(f"chunk_index={chunk['chunk_index']}")
-
-        source_parts.append(f"chunk_id={chunk['id']}")
-        source_parts.append(f"score={chunk['score']:.4f}")
-
-        print("- " + " | ".join(source_parts))
 
 def print_debug_info(question, chunks, messages):
-    print("\n--- DEBUG MODE ---")
-
-    print("\nKullanıcı sorusu:")
-    print(question)
-
-    print("\nRetrieved chunks:")
+    console.rule("[bold magenta]DEBUG[/bold magenta]", style="magenta")
+    console.print("[bold]Kullanıcı sorusu[/bold]")
+    console.print(question)
+    console.print("\n[bold]Retrieved chunks[/bold]")
     for chunk in chunks:
-        print("----")
-        print(f"Chunk ID: {chunk['id']}")
-        print(f"Kaynak: {chunk['source_name']}")
-        print(f"Skor: {chunk['score']:.4f}")
-        print("Metin:")
-        print(chunk["chunk_text"])
+        console.print(
+            f"[dim]ID {chunk['id']} · {chunk['source_name']} · "
+            f"skor {chunk['score']:.4f}[/dim]"
+        )
+        console.print(chunk["chunk_text"])
 
-    print("\nModele gönderilen mesajlar:")
+    console.print("\n[bold]Modele gönderilen mesajlar[/bold]")
     for message in messages:
-        print("----")
-        print("Role:", message["role"])
-        print(message["content"])
+        console.print(f"[bold magenta]{message['role']}[/bold magenta]")
+        console.print(message["content"])
 
-    print("--- DEBUG END ---")
+    console.rule(style="magenta")
 
 
 def should_use_extractive_answer(context_chunks):
@@ -217,6 +224,19 @@ def generate_with_fallback(messages, context_chunks, llm=None):
     return generated_answer, "generative", None, None
 
 
+def run_command_safely(action, error_message, solution):
+    try:
+        action()
+    except Exception as error:
+        print_issue(
+            "error",
+            error_message,
+            solution=solution,
+            error=error,
+            debug=DEBUG,
+        )
+
+
 def handle_command(command):
     global DEBUG
 
@@ -228,44 +248,62 @@ def handle_command(command):
         return "handled"
 
     if command == "/stats":
-        print_stats()
+        run_command_safely(
+            print_stats,
+            "Sistem bilgileri okunamadı.",
+            "/doctor çalıştır.",
+        )
         return "handled"
 
     if command == "/sources":
-        print_indexed_sources()
+        run_command_safely(
+            print_indexed_sources,
+            "İndekslenen kaynaklar okunamadı.",
+            "/doctor çalıştır; gerekirse /reindex ile indeksi yenile.",
+        )
         return "handled"
 
     if command == "/doctor":
-        print_doctor_report()
+        run_command_safely(
+            print_doctor_report,
+            "Sistem kontrolü tamamlanamadı.",
+            "/debug on ile teknik ayrıntıları açıp yeniden dene.",
+        )
         return "handled"
 
     if command == "/reindex":
-        print("\nRe-index başlatılıyor...")
-
         try:
-            ingest_documents()
+            with activity("Dokümanlar yeniden indeksleniyor..."):
+                total_chunks = ingest_documents()
         except Exception as error:
-            print("Re-index tamamlanamadı. Mevcut indeks korundu.")
-
-            if DEBUG:
-                print(f"Re-index hatası: {error}")
+            print_issue(
+                "error",
+                "Re-index tamamlanamadı; mevcut indeks korundu.",
+                solution="/doctor çalıştır ve docs/ klasöründeki dosyaları kontrol et.",
+                error=error,
+                debug=DEBUG,
+            )
         else:
-            print("Re-index tamamlandı.")
+            print_success(f"Re-index tamamlandı · {total_chunks} chunk")
 
         return "handled"
 
     if command == "/debug on":
         DEBUG = True
-        print("\nDebug modu açıldı.")
+        print_info("Debug modu açıldı.")
         return "handled"
 
     if command == "/debug off":
         DEBUG = False
-        print("\nDebug modu kapatıldı.")
+        print_info("Debug modu kapatıldı.")
         return "handled"
 
     if command.startswith("/"):
-        print("\nBilinmeyen komut. Komutları görmek için /help yaz.")
+        print_issue(
+            "warning",
+            "Bilinmeyen komut.",
+            solution="Komutları görmek için /help yaz.",
+        )
         return "handled"
 
     return None
@@ -275,7 +313,11 @@ def main():
     print_banner()
 
     while True:
-        question = input("\nrag> ").strip()
+        try:
+            question = read_prompt().strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Oturum kapatıldı.[/dim]")
+            break
 
         if not question:
             continue
@@ -291,30 +333,44 @@ def main():
         total_start_time = time.perf_counter()
 
         retrieval_start_time = time.perf_counter()
-        chunks = get_top_chunks(question, top_k=TOP_K)
+
+        try:
+            with activity("İlgili kaynaklar aranıyor..."):
+                chunks = get_top_chunks(question, top_k=TOP_K)
+        except Exception as error:
+            print_issue(
+                "error",
+                "Dokümanlarda arama yapılamadı.",
+                solution="/doctor çalıştır; indeks sorunu varsa /reindex ile yenile.",
+                error=error,
+                debug=DEBUG,
+            )
+            continue
+
         retrieval_end_time = time.perf_counter()
 
         retrieval_time = retrieval_end_time - retrieval_start_time
 
         if not chunks:
-            print("Veritabanında hiç chunk yok. Önce ingestion çalıştırılmalı.")
+            print_issue(
+                "warning",
+                "Aranabilecek bir indeks bulunamadı.",
+                solution="/reindex çalıştır.",
+            )
             continue
 
         best_score = chunks[0]["score"]
-
-        print("\nBulunan en iyi skor:", f"{best_score:.4f}")
 
         if best_score < SIMILARITY_THRESHOLD:
             total_end_time = time.perf_counter()
             total_time = total_end_time - total_start_time
 
-            print("\nCevap:")
-            print("Bu bilgi verilen dokümanlarda yok.")
-
-            print("\nPerformans:")
-            print(f"- retrieval: {retrieval_time:.3f} saniye")
-            print("- generation: 0.000 saniye")
-            print(f"- toplam: {total_time:.3f} saniye")
+            print_answer(
+                "Bu bilgi verilen dokümanlarda yok.",
+                "no_evidence",
+                best_score,
+            )
+            print_performance(retrieval_time, 0.0, total_time)
             continue
         
         context_chunks = [chunk for chunk in chunks if chunk["score"] >= CONTEXT_SCORE_THRESHOLD]
@@ -332,16 +388,26 @@ def main():
             generation_end_time = time.perf_counter()
         else:
             generation_start_time = time.perf_counter()
-            answer, answer_mode, fallback_notice, llm_error = generate_with_fallback(
-                messages,
-                context_chunks,
+            activity_message = (
+                f"{MODEL_ALIAS} yükleniyor ve cevap hazırlanıyor..."
+                if _llm is None
+                else "Cevap hazırlanıyor..."
             )
 
-            if fallback_notice:
-                print(f"\nNot: {fallback_notice}")
+            with activity(activity_message):
+                answer, answer_mode, fallback_notice, llm_error = generate_with_fallback(
+                    messages,
+                    context_chunks,
+                )
 
-            if DEBUG and llm_error:
-                print(f"LLM hatası: {llm_error}")
+            if fallback_notice:
+                print_issue(
+                    "warning",
+                    fallback_notice,
+                    solution="/doctor ile LLM durumunu kontrol et." if llm_error else None,
+                    error=llm_error,
+                    debug=DEBUG,
+                )
 
             generation_end_time = time.perf_counter()
 
@@ -350,17 +416,9 @@ def main():
         total_end_time = time.perf_counter()
         total_time = total_end_time - total_start_time
 
-        print("\nCevap:")
-        print(answer.strip())
-
-        print(f"\nCevap modu: {answer_mode}")
-
+        print_answer(answer, answer_mode, best_score)
         print_sources(context_chunks)
-
-        print("\nPerformans:")
-        print(f"- retrieval: {retrieval_time:.3f} saniye")
-        print(f"- generation: {generation_time:.3f} saniye")
-        print(f"- toplam: {total_time:.3f} saniye")
+        print_performance(retrieval_time, generation_time, total_time)
 
 
 if __name__ == "__main__":

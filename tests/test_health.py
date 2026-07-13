@@ -137,10 +137,16 @@ class HealthCheckTests(unittest.TestCase):
 
         output = buffer.getvalue()
         self.assertEqual(result, "handled")
-        self.assertIn("[OK] Dokümanlar: hazır", output)
-        self.assertIn("[UYARI] Embedding indeksi: boş", output)
+        self.assertIn("OK", output)
+        self.assertIn("Dokümanlar", output)
+        self.assertIn("hazır", output)
+        self.assertIn("UYARI", output)
+        self.assertIn("Embedding indeksi", output)
+        self.assertIn("boş", output)
         self.assertIn("Çözüm: /reindex çalıştır.", output)
-        self.assertIn("1 başarılı, 1 uyarı, 0 hata", output)
+        self.assertIn("1 başarılı", output)
+        self.assertIn("1 uyarı", output)
+        self.assertIn("0 hata", output)
 
 
 if __name__ == "__main__":
