@@ -97,6 +97,41 @@ def insert_chunk(
     conn.close()
 
 
+def replace_chunks(chunks):
+    conn = get_connection()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM chunks")
+        cursor.executemany("""
+        INSERT INTO chunks (
+            source_name,
+            source_type,
+            page_number,
+            chunk_index,
+            chunk_text,
+            embedding
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, [
+            (
+                chunk["source_name"],
+                chunk.get("source_type"),
+                chunk.get("page_number"),
+                chunk.get("chunk_index"),
+                chunk["chunk_text"],
+                json.dumps(chunk["embedding"]),
+            )
+            for chunk in chunks
+        ])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_all_chunks():
     conn = get_connection()
     cursor = conn.cursor()
@@ -156,3 +191,43 @@ def get_chunk_stats():
         "total_chunks": total_chunks,
         "source_count": source_count
     }
+
+
+def get_indexed_sources():
+    """İndeksteki her kaynak dosya için tür, sayfa ve chunk özetini döndürür.
+
+    Veritabanı dosyası yoksa boş liste döner. Dosya varsa `init_db()` ile
+    `chunks` tablosu ve eksik metadata kolonları güvenli şekilde hazırlanır;
+    böylece boş/eski şemalı dosyalarda sorgu çökmez.
+    """
+    if not DB_PATH.exists():
+        return []
+
+    init_db()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT
+            source_name,
+            MAX(source_type) AS source_type,
+            COUNT(*) AS chunk_count,
+            COUNT(DISTINCT page_number) AS page_count
+        FROM chunks
+        GROUP BY source_name
+        ORDER BY source_name
+        """)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    return [
+        {
+            "source_name": row[0],
+            "source_type": row[1],
+            "chunk_count": row[2],
+            "page_count": row[3],
+        }
+        for row in rows
+    ]

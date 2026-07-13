@@ -8,11 +8,12 @@ from app.config import (
     TOP_K,
     USE_EXTRACTIVE_FALLBACK,
 )
-from app.database import get_chunk_stats
+from app.database import get_chunk_stats, get_indexed_sources
 from app.embeddings import MODEL_NAME as EMBEDDING_MODEL_NAME
+from app.health import run_health_checks
 from app.retrieval import get_top_chunks
 from app.prompts import build_rag_messages
-from app.llm import LocalLLM, MODEL_ALIAS
+from app.llm import LocalLLM, MODEL_ALIAS, is_valid_answer
 from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, ingest_documents
 
 DEBUG = False
@@ -40,13 +41,15 @@ def print_banner():
     print("Docs: docs/")
     print("Database: data/rag.db")
     print()
-    print("Komutlar: /help, /stats, /reindex, /debug on, /debug off, /exit")
+    print("Komutlar: /help, /stats, /sources, /doctor, /reindex, /debug on, /debug off, /exit")
 
 
 def print_help():
     print("\nKomutlar:")
     print("- /help       Komut listesini gösterir")
     print("- /stats      Index ve model bilgilerini gösterir")
+    print("- /sources    İndeksteki dosya, tür, sayfa ve chunk sayılarını gösterir")
+    print("- /doctor     Sistem bileşenlerinin sağlık durumunu kontrol eder")
     print("- /reindex    docs/ klasörünü yeniden indexler")
     print("- /debug on   Debug çıktısını açar")
     print("- /debug off  Debug çıktısını kapatır")
@@ -69,6 +72,61 @@ def print_stats():
     print(f"- chunk overlap: {CHUNK_OVERLAP}")
     print(f"- similarity threshold: {SIMILARITY_THRESHOLD}")
     print(f"- context score threshold: {CONTEXT_SCORE_THRESHOLD}")
+
+
+def print_indexed_sources():
+    sources = get_indexed_sources()
+
+    if not sources:
+        print("\nİndekste kaynak dosya yok. Önce /reindex çalıştır.")
+        return
+
+    total_chunks = sum(source["chunk_count"] for source in sources)
+
+    print("\nİndeksteki kaynaklar:")
+
+    for source in sources:
+        source_type = source["source_type"] or "bilinmiyor"
+        page_count = source["page_count"]
+
+        if page_count > 0:
+            page_label = str(page_count)
+        else:
+            page_label = "-"
+
+        print(
+            f"- {source['source_name']} | tür={source_type} | "
+            f"sayfa={page_label} | chunk={source['chunk_count']}"
+        )
+
+    print(f"\nToplam: {len(sources)} dosya, {total_chunks} chunk")
+
+
+def print_doctor_report():
+    checks = run_health_checks()
+    status_labels = {
+        "ok": "OK",
+        "warning": "UYARI",
+        "error": "HATA",
+    }
+
+    print("\nSistem kontrolü:")
+
+    for check in checks:
+        label = status_labels[check.status]
+        print(f"[{label}] {check.name}: {check.message}")
+
+        if check.solution:
+            print(f"        Çözüm: {check.solution}")
+
+    ok_count = sum(check.status == "ok" for check in checks)
+    warning_count = sum(check.status == "warning" for check in checks)
+    error_count = sum(check.status == "error" for check in checks)
+
+    print(
+        f"\nSonuç: {ok_count} başarılı, "
+        f"{warning_count} uyarı, {error_count} hata"
+    )
 
 
 def print_sources(chunks):
@@ -130,6 +188,35 @@ def should_use_extractive_answer(context_chunks):
     return True
 
 
+def get_fallback_answer(context_chunks):
+    return context_chunks[0]["chunk_text"].strip()
+
+
+def generate_with_fallback(messages, context_chunks, llm=None):
+    fallback_answer = get_fallback_answer(context_chunks)
+
+    try:
+        llm_client = llm or get_llm()
+        generated_answer = llm_client.generate_answer(messages)
+    except Exception as error:
+        return (
+            fallback_answer,
+            "fallback_extractive",
+            "LLM yanıtı alınamadı; kaynak metin kullanıldı.",
+            error,
+        )
+
+    if not is_valid_answer(generated_answer):
+        return (
+            fallback_answer,
+            "fallback_extractive",
+            "LLM cevabı yeterli bulunmadı; kaynak metin kullanıldı.",
+            None,
+        )
+
+    return generated_answer, "generative", None, None
+
+
 def handle_command(command):
     global DEBUG
 
@@ -144,10 +231,27 @@ def handle_command(command):
         print_stats()
         return "handled"
 
+    if command == "/sources":
+        print_indexed_sources()
+        return "handled"
+
+    if command == "/doctor":
+        print_doctor_report()
+        return "handled"
+
     if command == "/reindex":
         print("\nRe-index başlatılıyor...")
-        ingest_documents()
-        print("Re-index tamamlandı.")
+
+        try:
+            ingest_documents()
+        except Exception as error:
+            print("Re-index tamamlanamadı. Mevcut indeks korundu.")
+
+            if DEBUG:
+                print(f"Re-index hatası: {error}")
+        else:
+            print("Re-index tamamlandı.")
+
         return "handled"
 
     if command == "/debug on":
@@ -228,8 +332,17 @@ def main():
             generation_end_time = time.perf_counter()
         else:
             generation_start_time = time.perf_counter()
-            answer = get_llm().generate_answer(messages)
-            answer_mode = "generative"
+            answer, answer_mode, fallback_notice, llm_error = generate_with_fallback(
+                messages,
+                context_chunks,
+            )
+
+            if fallback_notice:
+                print(f"\nNot: {fallback_notice}")
+
+            if DEBUG and llm_error:
+                print(f"LLM hatası: {llm_error}")
+
             generation_end_time = time.perf_counter()
 
         generation_time = generation_end_time - generation_start_time

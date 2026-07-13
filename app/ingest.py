@@ -1,14 +1,16 @@
+import re
 from pathlib import Path
 
 from pypdf import PdfReader
 
-from app.database import init_db, clear_chunks, insert_chunk
+from app.database import init_db, replace_chunks
 from app.embeddings import embed_texts
 
 
 DOCS_DIR = Path("docs")
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
+SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)")
 
 
 def read_txt_file(file_path):
@@ -82,10 +84,16 @@ def split_long_text(text, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
         end = min(start + chunk_size, len(clean_text))
 
         if end < len(clean_text):
-            split_at = clean_text.rfind(" ", start + chunk_size // 2, end)
+            search_start = start + chunk_size // 2
+            sentence_ends = list(SENTENCE_END_PATTERN.finditer(clean_text, search_start, end))
 
-            if split_at != -1:
-                end = split_at
+            if sentence_ends:
+                end = sentence_ends[-1].end()
+            else:
+                split_at = clean_text.rfind(" ", search_start, end)
+
+                if split_at != -1:
+                    end = split_at
 
         chunk = clean_text[start:end].strip()
 
@@ -95,21 +103,53 @@ def split_long_text(text, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
         if end >= len(clean_text):
             break
 
-        start = max(end - chunk_overlap, start + 1)
-
-        while start < len(clean_text) and clean_text[start].isspace():
-            start += 1
+        desired_start = max(end - chunk_overlap, start + 1)
+        next_start = align_chunk_start(clean_text, desired_start, end)
+        start = max(next_start, start + 1)
 
     return chunks
 
 
+def align_chunk_start(text, desired_start, previous_end):
+    if desired_start <= 0:
+        return 0
+
+    sentence_ends = list(SENTENCE_END_PATTERN.finditer(text, desired_start, previous_end))
+
+    if sentence_ends:
+        start = sentence_ends[0].end()
+
+        while start < len(text) and text[start].isspace():
+            start += 1
+
+        if start < previous_end:
+            return start
+
+    if text[previous_end - 1] in ".!?":
+        start = previous_end
+
+        while start < len(text) and text[start].isspace():
+            start += 1
+
+        return start
+
+    next_space = text.find(" ", desired_start, previous_end)
+
+    if next_space != -1:
+        return next_space + 1
+
+    previous_space = text.rfind(" ", 0, desired_start)
+
+    if previous_space != -1:
+        return previous_space + 1
+
+    return desired_start
+
+
 def ingest_documents():
     init_db()
-    clear_chunks()
-
     documents = read_documents()
-
-    total_chunks = 0
+    indexed_chunks = []
 
     for document in documents:
         chunks = split_text_into_chunks(document["text"])
@@ -120,15 +160,17 @@ def ingest_documents():
         embeddings = embed_texts(chunks)
 
         for chunk_index, (chunk, embedding) in enumerate(zip(chunks, embeddings), start=1):
-            insert_chunk(
-                source_name=document["source_name"],
-                source_type=document["source_type"],
-                page_number=document["page_number"],
-                chunk_index=chunk_index,
-                chunk_text=chunk,
-                embedding=embedding
-            )
+            indexed_chunks.append({
+                "source_name": document["source_name"],
+                "source_type": document["source_type"],
+                "page_number": document["page_number"],
+                "chunk_index": chunk_index,
+                "chunk_text": chunk,
+                "embedding": embedding,
+            })
 
-            total_chunks += 1
+    if not indexed_chunks:
+        raise ValueError("İndekslenecek metin bulunamadı; mevcut indeks korundu.")
 
-    print(f"Ingestion tamamlandı. Toplam chunk sayısı: {total_chunks}")
+    replace_chunks(indexed_chunks)
+    print(f"Ingestion tamamlandı. Toplam chunk sayısı: {len(indexed_chunks)}")

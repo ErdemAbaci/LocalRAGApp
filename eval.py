@@ -4,11 +4,19 @@ from pathlib import Path
 
 from app.config import SIMILARITY_THRESHOLD, TOP_K
 from app.database import get_all_chunks, get_chunk_stats
+from app.llm import is_valid_answer
 from app.retrieval import get_top_chunks
 
 
 EVAL_CASES_PATH = Path(__file__).with_name("eval_cases.json")
 EXPECTED_EMBEDDING_DIMENSION = 384
+
+ANSWER_QUALITY_CASES = [
+    ("", False),
+    ("Kısa cevap", False),
+    ("Kaynak: [Parça 1-3]", False),
+    ("Veri madenciliği, verilerden anlamlı bilgi çıkarma sürecidir.", True),
+]
 
 
 def load_eval_cases():
@@ -34,6 +42,16 @@ def validate_index():
             return False, f"chunk_id={chunk['id']} geçersiz embedding değeri içeriyor."
 
     return True, f"{len(chunks)} chunk ve embedding değerleri sağlıklı."
+
+
+def validate_answer_quality():
+    for answer, expected in ANSWER_QUALITY_CASES:
+        actual = is_valid_answer(answer)
+
+        if actual != expected:
+            return False, f"beklenen={expected}, gelen={actual}, cevap={answer!r}"
+
+    return True, f"{len(ANSWER_QUALITY_CASES)} cevap kalite kontrolü başarılı."
 
 
 def evaluate_relevant_case(case, results):
@@ -100,6 +118,13 @@ def main():
     print(f"{index_status:<5} index_health - {index_detail}")
 
     passed_count = 1 if index_passed else 0
+    quality_passed, quality_detail = validate_answer_quality()
+    quality_status = "PASS" if quality_passed else "FAIL"
+    print(f"{quality_status:<5} answer_quality - {quality_detail}")
+
+    if quality_passed:
+        passed_count += 1
+
     cases = load_eval_cases()
 
     for case in cases:
@@ -110,7 +135,7 @@ def main():
         if passed:
             passed_count += 1
 
-    total_count = len(cases) + 1
+    total_count = len(cases) + 2
     print(f"\n{passed_count}/{total_count} test başarılı")
 
     return 0 if passed_count == total_count else 1

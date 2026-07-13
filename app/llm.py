@@ -3,8 +3,10 @@ import re
 import openai
 from foundry_local import FoundryLocalManager
 
+from app.config import MIN_GENERATIVE_ANSWER_CHARS
 
-MODEL_ALIAS = "phi-3.5-mini"
+
+MODEL_ALIAS = "phi-4-mini"
 
 ANSWER_STOP_MARKERS = [
     "Kaynak:",
@@ -65,6 +67,24 @@ def clean_answer(answer):
             cleaned = cleaned[:marker_index].strip()
 
     return cleaned or original_answer
+
+
+def is_valid_answer(answer):
+    if not answer:
+        return False
+
+    cleaned = answer.strip()
+
+    if len(cleaned) < MIN_GENERATIVE_ANSWER_CHARS:
+        return False
+
+    if cleaned.lower().startswith(("kaynak:", "source:")):
+        return False
+
+    without_citations = re.sub(CITATION_PATTERN, "", cleaned).strip()
+    without_prefix = remove_answer_prefix(without_citations)
+
+    return len(without_prefix) >= MIN_GENERATIVE_ANSWER_CHARS
 
 
 class LocalLLM:
