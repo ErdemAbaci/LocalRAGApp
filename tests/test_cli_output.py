@@ -1,6 +1,7 @@
 import io
 import unittest
 from contextlib import redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import main
@@ -15,6 +16,7 @@ from app.cli_output import (
 class CliOutputTests(unittest.TestCase):
     def tearDown(self):
         main.DEBUG = False
+        main._llm = None
 
     def test_print_issue_hides_technical_detail_by_default(self):
         buffer = io.StringIO()
@@ -145,6 +147,85 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("OK", output)
         self.assertIn("Re-index tamamlandı", output)
         self.assertIn("12 chunk", output)
+
+    def test_model_command_is_read_only_and_shows_lazy_load_state(self):
+        checks = [
+            SimpleNamespace(
+                name="Foundry Local",
+                status="ok",
+                message="Terminal aracı hazır.",
+                solution=None,
+            ),
+            SimpleNamespace(
+                name="LLM modeli",
+                status="ok",
+                message="phi-4-mini cache içinde hazır.",
+                solution=None,
+            ),
+        ]
+        buffer = io.StringIO()
+
+        with patch("main.check_foundry", return_value=checks):
+            with patch("main.get_local_model_path", return_value="/cache/embedding"):
+                with patch("main.is_embedding_model_loaded", return_value=False):
+                    with patch("main.LocalLLM") as llm_class:
+                        with redirect_stdout(buffer):
+                            result = main.handle_command("/model")
+
+        output = buffer.getvalue()
+        self.assertEqual(result, "handled")
+        self.assertIn("Model durumu", output)
+        self.assertIn("phi-4-mini", output)
+        self.assertIn("paraphrase-multilingual-Min", output)
+        self.assertIn("iLM-L12-v2", output)
+        self.assertIn("henüz yüklenmedi", output)
+        self.assertIn("yerel Hugging Face snapshot", output)
+        self.assertIn("model yüklemez", output)
+        llm_class.assert_not_called()
+
+    def test_config_command_shows_active_values(self):
+        buffer = io.StringIO()
+
+        with redirect_stdout(buffer):
+            result = main.handle_command("/config")
+
+        output = buffer.getvalue()
+        self.assertEqual(result, "handled")
+        self.assertIn("RAG yapılandırması", output)
+        self.assertIn("TOP_K", output)
+        self.assertIn("SIMILARITY_THRESHOLD", output)
+        self.assertIn("CHUNK_SIZE", output)
+        self.assertIn("DOCS_DIR", output)
+        self.assertIn("Salt okunur", output)
+
+    def test_help_lists_model_and_config_commands(self):
+        buffer = io.StringIO()
+
+        with redirect_stdout(buffer):
+            main.print_help()
+
+        output = buffer.getvalue()
+        self.assertIn("/model", output)
+        self.assertIn("/config", output)
+
+    def test_get_llm_preserves_foundry_output_only_in_debug_mode(self):
+        main.DEBUG = True
+        fake_llm = object()
+
+        with patch("main.LocalLLM", return_value=fake_llm) as llm_class:
+            result = main.get_llm()
+
+        self.assertIs(result, fake_llm)
+        llm_class.assert_called_once_with(show_startup_output=True)
+
+    def test_get_llm_suppresses_foundry_output_in_normal_mode(self):
+        fake_llm = object()
+
+        with patch("main.LocalLLM", return_value=fake_llm) as llm_class:
+            result = main.get_llm()
+
+        self.assertIs(result, fake_llm)
+        llm_class.assert_called_once_with(show_startup_output=False)
 
 
 if __name__ == "__main__":

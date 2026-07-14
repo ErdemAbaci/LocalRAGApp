@@ -1,4 +1,6 @@
 import re
+import subprocess
+import time
 
 import openai
 from foundry_local import FoundryLocalManager
@@ -7,6 +9,8 @@ from app.config import MIN_GENERATIVE_ANSWER_CHARS
 
 
 MODEL_ALIAS = "phi-4-mini"
+FOUNDRY_START_ATTEMPTS = 100
+FOUNDRY_START_INTERVAL_SECONDS = 0.1
 
 ANSWER_STOP_MARKERS = [
     "Kaynak:",
@@ -99,9 +103,32 @@ def is_valid_answer(answer):
     return len(without_prefix) >= MIN_GENERATIVE_ANSWER_CHARS
 
 
+def create_foundry_manager(show_startup_output=False):
+    if show_startup_output:
+        return FoundryLocalManager()
+
+    manager = FoundryLocalManager(bootstrap=False)
+
+    if manager.is_service_running():
+        return manager
+
+    with subprocess.Popen(
+        ["foundry", "service", "start"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ):
+        for _ in range(FOUNDRY_START_ATTEMPTS):
+            if manager.is_service_running():
+                return manager
+
+            time.sleep(FOUNDRY_START_INTERVAL_SECONDS)
+
+    raise RuntimeError("Foundry Local servisi zamanında başlatılamadı.")
+
+
 class LocalLLM:
-    def __init__(self):
-        self.manager = FoundryLocalManager()
+    def __init__(self, show_startup_output=False):
+        self.manager = create_foundry_manager(show_startup_output)
 
         self.model_info = self.manager.load_model(MODEL_ALIAS)
 

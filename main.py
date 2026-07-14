@@ -17,17 +17,22 @@ from app.config import (
     CONTEXT_SCORE_THRESHOLD,
     EXTRACTIVE_SCORE_THRESHOLD,
     MAX_EXTRACTIVE_CHARS,
+    MIN_GENERATIVE_ANSWER_CHARS,
     SIMILARITY_THRESHOLD,
     TOP_K,
     USE_EXTRACTIVE_FALLBACK,
 )
-from app.database import get_chunk_stats, get_indexed_sources
-from app.embeddings import MODEL_NAME as EMBEDDING_MODEL_NAME
-from app.health import run_health_checks
+from app.database import DB_PATH, get_chunk_stats, get_indexed_sources
+from app.embeddings import (
+    MODEL_NAME as EMBEDDING_MODEL_NAME,
+    get_local_model_path,
+    is_embedding_model_loaded,
+)
+from app.health import check_foundry, run_health_checks
 from app.retrieval import get_top_chunks
 from app.prompts import build_rag_messages
 from app.llm import LocalLLM, MODEL_ALIAS, is_valid_answer
-from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, ingest_documents
+from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, DOCS_DIR, ingest_documents
 
 DEBUG = False
 
@@ -38,7 +43,7 @@ def get_llm():
     global _llm
 
     if _llm is None:
-        _llm = LocalLLM()
+        _llm = LocalLLM(show_startup_output=DEBUG)
 
     return _llm
 
@@ -54,6 +59,8 @@ def print_help():
         [
             ("/help", "Komut listesini gösterir"),
             ("/stats", "İndeks, model ve eşik bilgilerini gösterir"),
+            ("/model", "Model, cache ve yüklenme durumunu gösterir"),
+            ("/config", "Aktif RAG ayarlarını salt okunur gösterir"),
             ("/sources", "İndeksteki dosya, sayfa ve chunk sayılarını gösterir"),
             ("/doctor", "Sistem bileşenlerinin sağlık durumunu kontrol eder"),
             ("/reindex", "docs/ klasörünü yeniden indeksler"),
@@ -62,6 +69,107 @@ def print_help():
             ("/exit", "Uygulamadan çıkar"),
         ],
         footer="Normal soru sormak için doğrudan yazman yeterli.",
+    )
+
+
+def print_model_info():
+    checks = check_foundry()
+    foundry_check = next(
+        (check for check in checks if check.name == "Foundry Local"),
+        None,
+    )
+    model_check = next(
+        (check for check in checks if check.name == "LLM modeli"),
+        None,
+    )
+    embedding_cached = get_local_model_path() is not None
+    short_embedding_name = EMBEDDING_MODEL_NAME.rsplit("/", maxsplit=1)[-1]
+
+    foundry_status = foundry_check.message if foundry_check else "kontrol edilemedi"
+    model_cache_status = model_check.message if model_check else "kontrol edilemedi"
+    footer = "Bu komut model yüklemez ve ayar değiştirmez."
+
+    if model_check and model_check.solution:
+        footer += f" Çözüm: {model_check.solution}"
+
+    print_table(
+        "Model durumu",
+        [
+            ("Bileşen", "bold", "left", True),
+            ("Değer", "cyan", "left", False, "fold"),
+            ("Durum",),
+        ],
+        [
+            ("Chat modeli", MODEL_ALIAS, "aktif alias"),
+            ("Çalışma zamanı", "Microsoft Foundry Local", foundry_status),
+            ("Chat model cache", MODEL_ALIAS, model_cache_status),
+            (
+                "Chat model oturumu",
+                "yüklü" if _llm is not None else "henüz yüklenmedi",
+                "lazy-load: ilk üretken cevapta yüklenir",
+            ),
+            ("Embedding modeli", short_embedding_name, "384 boyut"),
+            (
+                "Embedding cache",
+                "hazır" if embedding_cached else "bulunamadı",
+                "yerel Hugging Face snapshot",
+            ),
+            (
+                "Embedding oturumu",
+                "yüklü" if is_embedding_model_loaded() else "henüz yüklenmedi",
+                "lazy-load: ilk aramada yüklenir",
+            ),
+        ],
+        footer=footer,
+    )
+
+
+def print_config_info():
+    print_table(
+        "RAG yapılandırması",
+        [
+            ("Ayar", "bold", "left", True),
+            ("Değer", "cyan", "right", True),
+            ("Açıklama",),
+        ],
+        [
+            ("TOP_K", TOP_K, "Retrieval sonucunda tutulacak en iyi chunk sayısı"),
+            (
+                "SIMILARITY_THRESHOLD",
+                SIMILARITY_THRESHOLD,
+                "Altında kalan sorular kapsam dışı kabul edilir",
+            ),
+            (
+                "CONTEXT_SCORE_THRESHOLD",
+                CONTEXT_SCORE_THRESHOLD,
+                "LLM context'ine girecek minimum chunk skoru",
+            ),
+            (
+                "EXTRACTIVE_SCORE_THRESHOLD",
+                EXTRACTIVE_SCORE_THRESHOLD,
+                "Doğrudan kaynak cevabı için minimum skor",
+            ),
+            (
+                "USE_EXTRACTIVE_FALLBACK",
+                "açık" if USE_EXTRACTIVE_FALLBACK else "kapalı",
+                "Güvenli doğrudan/fallback cevabını etkinleştirir",
+            ),
+            (
+                "MAX_EXTRACTIVE_CHARS",
+                MAX_EXTRACTIVE_CHARS,
+                "Doğrudan gösterilebilecek en uzun kaynak metni",
+            ),
+            (
+                "MIN_GENERATIVE_ANSWER_CHARS",
+                MIN_GENERATIVE_ANSWER_CHARS,
+                "Daha kısa LLM cevapları geçersiz sayılır",
+            ),
+            ("CHUNK_SIZE", CHUNK_SIZE, "Bir chunk'ın hedef maksimum karakteri"),
+            ("CHUNK_OVERLAP", CHUNK_OVERLAP, "Ardışık chunklar arasındaki tekrar"),
+            ("DOCS_DIR", DOCS_DIR, "İndekslenecek doküman klasörü"),
+            ("DB_PATH", DB_PATH, "Üretilen SQLite indeks yolu"),
+        ],
+        footer="Salt okunur görünüm; bu komut ayarları değiştirmez.",
     )
 
 
@@ -252,6 +360,22 @@ def handle_command(command):
             print_stats,
             "Sistem bilgileri okunamadı.",
             "/doctor çalıştır.",
+        )
+        return "handled"
+
+    if command == "/model":
+        run_command_safely(
+            print_model_info,
+            "Model bilgileri okunamadı.",
+            "/doctor çalıştır.",
+        )
+        return "handled"
+
+    if command == "/config":
+        run_command_safely(
+            print_config_info,
+            "RAG yapılandırması gösterilemedi.",
+            "/debug on ile teknik ayrıntıları açıp yeniden dene.",
         )
         return "handled"
 

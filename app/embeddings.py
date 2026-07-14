@@ -15,6 +15,10 @@ def get_local_model_path():
         return None
 
 
+def is_embedding_model_loaded():
+    return _embedding_model is not None
+
+
 def get_embedding_model():
     global _embedding_model
 

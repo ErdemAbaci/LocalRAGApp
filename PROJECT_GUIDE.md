@@ -87,7 +87,7 @@ Uygulamanın ana giriş noktasıdır. Terminal arayüzünü ve bütün RAG karar
 Başlıca sorumlulukları:
 
 - Açılış banner'ını ve `rag>` prompt'unu gösterir.
-- `/help`, `/stats`, `/sources`, `/doctor`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
+- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/doctor`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
 - Kullanıcı sorusu için retrieval çalıştırır.
 - En iyi similarity skorunu kontrol eder.
 - Context'e girecek chunkları filtreler.
@@ -96,6 +96,8 @@ Başlıca sorumlulukları:
 - Kaynakları, skorları ve süreleri ekrana yazdırır.
 
 LLM uygulama açılır açılmaz yüklenmez. `get_llm()` fonksiyonu sayesinde yalnızca ilk generative cevap gerektiğinde yüklenir ve aynı oturumda tekrar kullanılır. Buna lazy loading denir.
+
+`/model` aktif chat ve embedding modellerini, yerel cache durumlarını ve mevcut CLI oturumunda belleğe yüklenip yüklenmediklerini gösterir. `/config` retrieval, cevap kalitesi ve chunking ayarlarını açıklamalarıyla listeler. İki komut da salt okunurdur; model yüklemez, inference yapmaz, indeks veya ayar değiştirmez.
 
 ### `app/config.py`
 
@@ -290,11 +292,13 @@ MODEL_ALIAS = "phi-4-mini"
 
 `LocalLLM` sınıfı:
 
-1. `FoundryLocalManager` oluşturur.
+1. Foundry Local servis durumunu kontrol eder; normal modda gerekirse servisi sessiz başlatır.
 2. Seçilen modeli yerel cache'ten yükler.
 3. Foundry Local'ın OpenAI-compatible endpoint'ine bağlanan client'ı oluşturur.
 4. Chat completion çağrısı yapar.
 5. Ham cevabı `clean_answer()` ile temizler.
+
+Foundry SDK normalde `foundry service start` alt sürecinin çıktısını doğrudan terminale bağlar. `create_foundry_manager()` normal modda aynı servisi `stdout` ve `stderr` kapalı başlatıp hazır olana kadar durumunu kontrol eder; böylece `Service is Started...` mesajı Rich spinner satırına karışmaz. `/debug on` açıkken SDK'nın varsayılan başlangıç yolu kullanılır ve ham çıktı tanılama amacıyla görünür kalır.
 
 `clean_answer()` modelin ekleyebildiği `Cevap:`, `Kaynak:`, `[Parça 1-3]`, `(Parça 1)` ve `(Parça 3)` gibi istenmeyen etiketleri temizler. Etiket kaldırılırken noktalama önündeki gereksiz boşluklar da düzeltilir. Parça numaraları yalnızca modelin context'i ayırmasına yardım eder; kullanıcı kaynak bilgisini aşağıdaki kaynak tablosundan görür.
 
@@ -469,6 +473,8 @@ CLI komutları:
 ```text
 /help       Komutları gösterir
 /stats      Index, model ve threshold bilgilerini gösterir
+/model      Model, cache ve oturumdaki lazy-load durumunu gösterir
+/config     Aktif RAG ayarlarını açıklamalarıyla salt okunur gösterir
 /sources    İndeksteki dosya, tür, sayfa ve chunk sayılarını gösterir
 /doctor     Doküman, indeks, embedding ve Foundry/model sağlığını kontrol eder
 /reindex    docs/ klasörünü yeniden işler
@@ -482,6 +488,8 @@ CLI komutları:
 ```text
 /reindex
 /stats
+/model
+/config
 /sources
 /doctor
 RAG nedir?
@@ -584,7 +592,7 @@ Son eval ve unit test çalışmasında:
 11 chunk
 2 kaynak dosya
 6/6 eval testi başarılı
-29/29 unit testi başarılı
+38/38 unit testi başarılı
 ```
 
 Başarılı kontroller:
@@ -601,6 +609,8 @@ Başarılı kontroller:
 - Rich terminal görünümü: semantik cevap renkleri, Türkçe mod/süre etiketleri, ortak sol hiza, dar terminal ve TTY spinner kontrolü
 - LLM cevap temizliği: köşeli/parantezli tekli, aralıklı ve listeli parça atıflarının kaldırılması
 - Yerel embedding snapshot yüklemesi: cache varken ağ isteği olmadan 384 boyut doğrulaması
+- Foundry başlangıcı: normal modda alt süreç çıktısının bastırılması, debug modunda korunması ve timeout hata yolu
+- `/model` ve `/config`: model yüklemeden cache/lazy-load durumu ile aktif ayarların gösterilmesi
 
 ## 12. Yakın roadmap
 
@@ -610,16 +620,17 @@ Başarılı kontroller:
 - `/doctor`: Doküman, veritabanı, embedding ve Foundry/model cache sağlığını kontrol eder.
 - Standart hata mesajları: kullanıcı mesajını teknik ayrıntıdan ayırır ve çözüm gösterir.
 - Rich terminal görünümü: sade banner, semantik cevap paneli, hizalı tablolar, Türkçe süreler ve uzun işlemler için spinner gösterir.
+- Sessiz Foundry başlangıcı: normal kullanıcı görünümünde servis logunu gizler, debug modunda ham çıktıyı korur.
+- `/model` ve `/config`: model/cache/lazy-load durumunu ve aktif ayarları salt okunur gösterir.
 
 ### V1'i tamamlama
 
-1. Fallback'in gerçek model entegrasyonunu farklı hata senaryolarıyla izlemek.
-2. `/model` ve `/config` bilgi komutlarını eklemek.
-3. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
-4. Varsayılan modeli test sonuçlarına göre seçmek.
-5. Model alias'ını environment variable veya CLI komutuyla değiştirilebilir yapmak.
+1. Gerçek `local-rag` terminal entrypoint'i ve alt komutlarını eklemek.
+2. Doküman değişikliklerini algılayıp reindex gerektiğini bildirmek.
+3. Güvenli `/add` ve onaylı `/remove` dosya yönetimini eklemek.
+4. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
+5. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
 6. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
-7. Gerçek `local-rag` terminal entrypoint'i eklemek.
 
 ### V2 fikirleri
 

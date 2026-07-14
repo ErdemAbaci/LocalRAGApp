@@ -77,6 +77,7 @@ def print_table(title, columns, rows, footer=None):
             style=column[1] if len(column) > 1 else None,
             justify=column[2] if len(column) > 2 else "left",
             no_wrap=column[3] if len(column) > 3 else False,
+            overflow=column[4] if len(column) > 4 else "ellipsis",
         )
 
     for row in rows:
