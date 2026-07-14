@@ -1,5 +1,7 @@
+import argparse
 import time
 
+from app import __version__
 from app.cli_output import (
     activity,
     console,
@@ -343,6 +345,67 @@ def run_command_safely(action, error_message, solution):
             error=error,
             debug=DEBUG,
         )
+        return False
+
+    return True
+
+
+def reindex_documents():
+    try:
+        with activity("Dokümanlar yeniden indeksleniyor..."):
+            total_chunks = ingest_documents()
+    except Exception as error:
+        print_issue(
+            "error",
+            "Re-index tamamlanamadı; mevcut indeks korundu.",
+            solution="/doctor çalıştır ve docs/ klasöründeki dosyaları kontrol et.",
+            error=error,
+            debug=DEBUG,
+        )
+        return False
+
+    print_success(f"Re-index tamamlandı · {total_chunks} chunk")
+    return True
+
+
+INFO_COMMAND_MESSAGES = {
+    "/stats": (
+        "Sistem bilgileri okunamadı.",
+        "/doctor çalıştır.",
+    ),
+    "/model": (
+        "Model bilgileri okunamadı.",
+        "/doctor çalıştır.",
+    ),
+    "/config": (
+        "RAG yapılandırması gösterilemedi.",
+        "/debug on ile teknik ayrıntıları açıp yeniden dene.",
+    ),
+    "/sources": (
+        "İndekslenen kaynaklar okunamadı.",
+        "/doctor çalıştır; gerekirse /reindex ile indeksi yenile.",
+    ),
+    "/doctor": (
+        "Sistem kontrolü tamamlanamadı.",
+        "/debug on ile teknik ayrıntıları açıp yeniden dene.",
+    ),
+}
+
+
+def execute_command(command):
+    if command == "/reindex":
+        return reindex_documents()
+
+    actions = {
+        "/stats": print_stats,
+        "/model": print_model_info,
+        "/config": print_config_info,
+        "/sources": print_indexed_sources,
+        "/doctor": print_doctor_report,
+    }
+    error_message, solution = INFO_COMMAND_MESSAGES[command]
+    action = actions[command]
+    return run_command_safely(action, error_message, solution)
 
 
 def handle_command(command):
@@ -355,61 +418,12 @@ def handle_command(command):
         print_help()
         return "handled"
 
-    if command == "/stats":
-        run_command_safely(
-            print_stats,
-            "Sistem bilgileri okunamadı.",
-            "/doctor çalıştır.",
-        )
-        return "handled"
-
-    if command == "/model":
-        run_command_safely(
-            print_model_info,
-            "Model bilgileri okunamadı.",
-            "/doctor çalıştır.",
-        )
-        return "handled"
-
-    if command == "/config":
-        run_command_safely(
-            print_config_info,
-            "RAG yapılandırması gösterilemedi.",
-            "/debug on ile teknik ayrıntıları açıp yeniden dene.",
-        )
-        return "handled"
-
-    if command == "/sources":
-        run_command_safely(
-            print_indexed_sources,
-            "İndekslenen kaynaklar okunamadı.",
-            "/doctor çalıştır; gerekirse /reindex ile indeksi yenile.",
-        )
-        return "handled"
-
-    if command == "/doctor":
-        run_command_safely(
-            print_doctor_report,
-            "Sistem kontrolü tamamlanamadı.",
-            "/debug on ile teknik ayrıntıları açıp yeniden dene.",
-        )
+    if command in INFO_COMMAND_MESSAGES:
+        execute_command(command)
         return "handled"
 
     if command == "/reindex":
-        try:
-            with activity("Dokümanlar yeniden indeksleniyor..."):
-                total_chunks = ingest_documents()
-        except Exception as error:
-            print_issue(
-                "error",
-                "Re-index tamamlanamadı; mevcut indeks korundu.",
-                solution="/doctor çalıştır ve docs/ klasöründeki dosyaları kontrol et.",
-                error=error,
-                debug=DEBUG,
-            )
-        else:
-            print_success(f"Re-index tamamlandı · {total_chunks} chunk")
-
+        execute_command(command)
         return "handled"
 
     if command == "/debug on":
@@ -433,6 +447,102 @@ def handle_command(command):
     return None
 
 
+def answer_question(question):
+    question = question.strip()
+
+    if not question:
+        print_issue("warning", "Soru boş olamaz.")
+        return False
+
+    total_start_time = time.perf_counter()
+    retrieval_start_time = time.perf_counter()
+
+    try:
+        with activity("İlgili kaynaklar aranıyor..."):
+            chunks = get_top_chunks(question, top_k=TOP_K)
+    except Exception as error:
+        print_issue(
+            "error",
+            "Dokümanlarda arama yapılamadı.",
+            solution="/doctor çalıştır; indeks sorunu varsa /reindex ile yenile.",
+            error=error,
+            debug=DEBUG,
+        )
+        return False
+
+    retrieval_end_time = time.perf_counter()
+    retrieval_time = retrieval_end_time - retrieval_start_time
+
+    if not chunks:
+        print_issue(
+            "warning",
+            "Aranabilecek bir indeks bulunamadı.",
+            solution="/reindex çalıştır.",
+        )
+        return False
+
+    best_score = chunks[0]["score"]
+
+    if best_score < SIMILARITY_THRESHOLD:
+        total_time = time.perf_counter() - total_start_time
+        print_answer(
+            "Bu bilgi verilen dokümanlarda yok.",
+            "no_evidence",
+            best_score,
+        )
+        print_performance(retrieval_time, 0.0, total_time)
+        return True
+
+    context_chunks = [
+        chunk
+        for chunk in chunks
+        if chunk["score"] >= CONTEXT_SCORE_THRESHOLD
+    ]
+
+    if not context_chunks:
+        context_chunks = [chunks[0]]
+
+    messages = build_rag_messages(question, context_chunks)
+
+    if DEBUG:
+        print_debug_info(question, context_chunks, messages)
+
+    generation_start_time = time.perf_counter()
+
+    if should_use_extractive_answer(context_chunks):
+        answer = context_chunks[0]["chunk_text"]
+        answer_mode = "extractive"
+    else:
+        activity_message = (
+            f"{MODEL_ALIAS} yükleniyor ve cevap hazırlanıyor..."
+            if _llm is None
+            else "Cevap hazırlanıyor..."
+        )
+
+        with activity(activity_message):
+            answer, answer_mode, fallback_notice, llm_error = generate_with_fallback(
+                messages,
+                context_chunks,
+            )
+
+        if fallback_notice:
+            print_issue(
+                "warning",
+                fallback_notice,
+                solution="/doctor ile LLM durumunu kontrol et." if llm_error else None,
+                error=llm_error,
+                debug=DEBUG,
+            )
+
+    generation_time = time.perf_counter() - generation_start_time
+    total_time = time.perf_counter() - total_start_time
+
+    print_answer(answer, answer_mode, best_score)
+    print_sources(context_chunks)
+    print_performance(retrieval_time, generation_time, total_time)
+    return True
+
+
 def main():
     print_banner()
 
@@ -453,97 +563,85 @@ def main():
 
         if command_result == "handled":
             continue
-        
-        total_start_time = time.perf_counter()
 
-        retrieval_start_time = time.perf_counter()
+        answer_question(question)
 
-        try:
-            with activity("İlgili kaynaklar aranıyor..."):
-                chunks = get_top_chunks(question, top_k=TOP_K)
-        except Exception as error:
-            print_issue(
-                "error",
-                "Dokümanlarda arama yapılamadı.",
-                solution="/doctor çalıştır; indeks sorunu varsa /reindex ile yenile.",
-                error=error,
-                debug=DEBUG,
-            )
-            continue
 
-        retrieval_end_time = time.perf_counter()
+class TurkishArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        kwargs["add_help"] = False
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "argümanlar"
+        self._optionals.title = "seçenekler"
+        self.add_argument(
+            "-h",
+            "--help",
+            action="help",
+            help="Bu yardım metnini gösterir ve çıkar.",
+        )
 
-        retrieval_time = retrieval_end_time - retrieval_start_time
+    def format_usage(self):
+        return super().format_usage().replace("usage:", "kullanım:", 1)
 
-        if not chunks:
-            print_issue(
-                "warning",
-                "Aranabilecek bir indeks bulunamadı.",
-                solution="/reindex çalıştır.",
-            )
-            continue
+    def format_help(self):
+        return super().format_help().replace("usage:", "kullanım:", 1)
 
-        best_score = chunks[0]["score"]
 
-        if best_score < SIMILARITY_THRESHOLD:
-            total_end_time = time.perf_counter()
-            total_time = total_end_time - total_start_time
+def build_cli_parser():
+    parser = TurkishArgumentParser(
+        prog="local-rag",
+        description="Yerel dokümanlarından Türkçe cevap üreten RAG asistanı.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Teknik retrieval ve hata ayrıntılarını gösterir.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Sürüm bilgisini gösterir ve çıkar.",
+    )
 
-            print_answer(
-                "Bu bilgi verilen dokümanlarda yok.",
-                "no_evidence",
-                best_score,
-            )
-            print_performance(retrieval_time, 0.0, total_time)
-            continue
-        
-        context_chunks = [chunk for chunk in chunks if chunk["score"] >= CONTEXT_SCORE_THRESHOLD]
-        if not context_chunks:
-            context_chunks = [chunks[0]]
-        messages = build_rag_messages(question, context_chunks)
+    subparsers = parser.add_subparsers(dest="command", title="komutlar")
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="Tek bir soru sorar ve işlem tamamlanınca çıkar.",
+    )
+    ask_parser.add_argument("question", nargs="+", help="Sorulacak metin")
 
-        if DEBUG:
-            print_debug_info(question, context_chunks, messages)
+    command_help = {
+        "reindex": "docs/ klasörünü yeniden indeksler.",
+        "stats": "İndeks ve sistem durumunu gösterir.",
+        "sources": "İndeksteki kaynakları gösterir.",
+        "doctor": "Sistem bileşenlerini kontrol eder.",
+        "model": "Model, cache ve lazy-load durumunu gösterir.",
+        "config": "Aktif RAG ayarlarını gösterir.",
+    }
 
-        if should_use_extractive_answer(context_chunks):
-            generation_start_time = time.perf_counter()
-            answer = context_chunks[0]["chunk_text"]
-            answer_mode = "extractive"
-            generation_end_time = time.perf_counter()
-        else:
-            generation_start_time = time.perf_counter()
-            activity_message = (
-                f"{MODEL_ALIAS} yükleniyor ve cevap hazırlanıyor..."
-                if _llm is None
-                else "Cevap hazırlanıyor..."
-            )
+    for command, help_text in command_help.items():
+        subparsers.add_parser(command, help=help_text)
 
-            with activity(activity_message):
-                answer, answer_mode, fallback_notice, llm_error = generate_with_fallback(
-                    messages,
-                    context_chunks,
-                )
+    return parser
 
-            if fallback_notice:
-                print_issue(
-                    "warning",
-                    fallback_notice,
-                    solution="/doctor ile LLM durumunu kontrol et." if llm_error else None,
-                    error=llm_error,
-                    debug=DEBUG,
-                )
 
-            generation_end_time = time.perf_counter()
+def cli(argv=None):
+    global DEBUG
 
-        generation_time = generation_end_time - generation_start_time
+    args = build_cli_parser().parse_args(argv)
+    DEBUG = args.debug
 
-        total_end_time = time.perf_counter()
-        total_time = total_end_time - total_start_time
+    if args.command is None:
+        main()
+        return 0
 
-        print_answer(answer, answer_mode, best_score)
-        print_sources(context_chunks)
-        print_performance(retrieval_time, generation_time, total_time)
+    if args.command == "ask":
+        question = " ".join(args.question)
+        return 0 if answer_question(question) else 1
+
+    return 0 if execute_command(f"/{args.command}") else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(cli())

@@ -56,10 +56,14 @@ Eşik ve cevap modu kararı
 
 ```text
 local-rag-assistant/
+├── pyproject.toml             # Paket metadata'sı ve local-rag entrypoint'i
 ├── app/
+│   ├── __init__.py            # Paket sürümü
+│   ├── cli_output.py
 │   ├── config.py
 │   ├── database.py
 │   ├── embeddings.py
+│   ├── health.py
 │   ├── ingest.py
 │   ├── llm.py
 │   ├── prompts.py
@@ -75,6 +79,7 @@ local-rag-assistant/
 ├── foundry_test.py
 ├── main.py
 ├── requirements.txt
+├── tests/
 └── PROJECT_GUIDE.md
 ```
 
@@ -98,6 +103,14 @@ Başlıca sorumlulukları:
 LLM uygulama açılır açılmaz yüklenmez. `get_llm()` fonksiyonu sayesinde yalnızca ilk generative cevap gerektiğinde yüklenir ve aynı oturumda tekrar kullanılır. Buna lazy loading denir.
 
 `/model` aktif chat ve embedding modellerini, yerel cache durumlarını ve mevcut CLI oturumunda belleğe yüklenip yüklenmediklerini gösterir. `/config` retrieval, cevap kalitesi ve chunking ayarlarını açıklamalarıyla listeler. İki komut da salt okunurdur; model yüklemez, inference yapmaz, indeks veya ayar değiştirmez.
+
+`answer_question()` retrieval, cevap modu, fallback, kaynak ve performans gösterimini tek yerde tutar. Hem interaktif `rag>` döngüsü hem `local-rag ask` bu fonksiyonu çağırır; bu nedenle iki kullanım biçimi zamanla farklı RAG davranışları geliştirmez.
+
+`cli()` argparse alt komutlarını işler. Argümansız çağrıda interaktif oturumu açar; `ask` tek sorudan sonra çıkar, diğer alt komutları ortak komut çalıştırıcısına yönlendirir. Başarı `0`, operasyonel hata `1`, geçersiz terminal kullanımı `2` exit code üretir.
+
+### `pyproject.toml`
+
+Projeyi standart bir Python paketi olarak tanımlar. `local-rag = "main:cli"` kaydı, virtual environment içindeki `local-rag` executable'ını üretir. Sürüm `app.__version__` üzerinden okunur; mevcut sürüm `0.1.0`dır.
 
 ### `app/config.py`
 
@@ -462,11 +475,35 @@ Bağımlılıkları yüklemek gerekirse:
 pip install -r requirements.txt
 ```
 
+Terminal komutunu editable kur:
+
+```bash
+pip install -e .
+```
+
 Uygulamayı başlat:
 
 ```bash
-python main.py
+local-rag
 ```
+
+`python main.py` aynı interaktif uygulama için desteklenmeye devam eder.
+
+Tek seferlik terminal kullanımları:
+
+```bash
+local-rag ask "RAG nedir?"
+local-rag reindex
+local-rag stats
+local-rag sources
+local-rag doctor
+local-rag model
+local-rag config
+local-rag --help
+local-rag --version
+```
+
+`local-rag --debug ask "RAG nedir?"` tek soruluk akışta teknik ayrıntıları açar. `docs/` ve `data/` yolları çalışma dizinine göre çözüldüğü için komut şimdilik repository kökünde çalıştırılmalıdır.
 
 CLI komutları:
 
@@ -592,7 +629,7 @@ Son eval ve unit test çalışmasında:
 11 chunk
 2 kaynak dosya
 6/6 eval testi başarılı
-38/38 unit testi başarılı
+47/47 unit testi başarılı
 ```
 
 Başarılı kontroller:
@@ -611,6 +648,8 @@ Başarılı kontroller:
 - Yerel embedding snapshot yüklemesi: cache varken ağ isteği olmadan 384 boyut doğrulaması
 - Foundry başlangıcı: normal modda alt süreç çıktısının bastırılması, debug modunda korunması ve timeout hata yolu
 - `/model` ve `/config`: model yüklemeden cache/lazy-load durumu ile aktif ayarların gösterilmesi
+- `local-rag` paketi: editable kurulum, Türkçe sürüm/yardım, interaktif oturum, `ask`, `reindex` ve bilgi alt komutları
+- Ortak soru akışı ve exit code'lar: interaktif/tek-komut davranış birliği, başarı `0`, operasyonel hata `1`
 
 ## 12. Yakın roadmap
 
@@ -622,15 +661,15 @@ Başarılı kontroller:
 - Rich terminal görünümü: sade banner, semantik cevap paneli, hizalı tablolar, Türkçe süreler ve uzun işlemler için spinner gösterir.
 - Sessiz Foundry başlangıcı: normal kullanıcı görünümünde servis logunu gizler, debug modunda ham çıktıyı korur.
 - `/model` ve `/config`: model/cache/lazy-load durumunu ve aktif ayarları salt okunur gösterir.
+- Kurulabilir CLI: `local-rag` interaktif oturumunu ve tek seferlik alt komutları standart Python entrypoint'iyle sunar.
 
 ### V1'i tamamlama
 
-1. Gerçek `local-rag` terminal entrypoint'i ve alt komutlarını eklemek.
-2. Doküman değişikliklerini algılayıp reindex gerektiğini bildirmek.
-3. Güvenli `/add` ve onaylı `/remove` dosya yönetimini eklemek.
-4. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
-5. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
-6. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
+1. Doküman değişikliklerini algılayıp reindex gerektiğini bildirmek.
+2. Güvenli `/add` ve onaylı `/remove` dosya yönetimini eklemek.
+3. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
+4. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
+5. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
 
 ### V2 fikirleri
 
@@ -649,7 +688,8 @@ cd /Users/erdemac/Developer/local-rag-assistant
 source .venv/bin/activate
 git status
 python eval.py
-python main.py
+local-rag stats
+local-rag
 ```
 
 Yeni doküman eklenmişse:
