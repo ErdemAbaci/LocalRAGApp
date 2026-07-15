@@ -138,6 +138,8 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertIn("seçenekler:", output)
         self.assertIn("komutlar:", output)
         self.assertIn("Bu yardım metnini gösterir", output)
+        self.assertIn("add", output)
+        self.assertIn("remove", output)
 
 
 if __name__ == "__main__":

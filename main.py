@@ -1,4 +1,5 @@
 import argparse
+import shlex
 import time
 
 from app import __version__
@@ -25,6 +26,12 @@ from app.config import (
     USE_EXTRACTIVE_FALLBACK,
 )
 from app.database import DB_PATH, get_chunk_stats, get_indexed_sources
+from app.document_manager import (
+    DocumentManagementError,
+    add_document,
+    remove_document,
+    resolve_managed_document,
+)
 from app.embeddings import (
     MODEL_NAME as EMBEDDING_MODEL_NAME,
     get_local_model_path,
@@ -66,6 +73,8 @@ def print_help():
             ("/config", "Aktif RAG ayarlarını salt okunur gösterir"),
             ("/sources", "İndeksteki dosya, sayfa ve chunk sayılarını gösterir"),
             ("/doctor", "Sistem bileşenlerinin sağlık durumunu kontrol eder"),
+            ("/add <yol>", "TXT veya PDF dosyasını docs/ klasörüne ekler"),
+            ("/remove <dosya>", "Dokümanı onay alarak docs/ klasöründen siler"),
             ("/reindex", "docs/ klasörünü yeniden indeksler"),
             ("/debug on", "Teknik debug çıktısını açar"),
             ("/debug off", "Teknik debug çıktısını kapatır"),
@@ -398,6 +407,81 @@ def reindex_documents():
     return True
 
 
+def add_document_command(source_path):
+    try:
+        with activity("Doküman doğrulanıyor ve ekleniyor..."):
+            destination = add_document(source_path, DOCS_DIR)
+    except DocumentManagementError as error:
+        print_issue(
+            "error",
+            str(error),
+            solution=(
+                "Dosya yolunu, türünü, içeriğini ve docs/ içindeki mevcut adları kontrol et."
+            ),
+        )
+        return False
+    except Exception as error:
+        print_issue(
+            "error",
+            "Doküman eklenemedi.",
+            solution="Dosya izinlerini ve docs/ klasörünü kontrol et.",
+            error=error,
+            debug=DEBUG,
+        )
+        return False
+
+    print_success(f"Doküman eklendi · {destination.name}")
+    print_info("İndeksi güncellemek için /reindex veya local-rag reindex çalıştır.")
+    return True
+
+
+def confirm_document_removal(source_name):
+    try:
+        answer = console.input(
+            f"\n[bold yellow]{source_name} silinsin mi?[/bold yellow] "
+            "[dim](e/H)[/dim] "
+        )
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    return answer.strip().lower() in {"e", "evet"}
+
+
+def remove_document_command(source_name, assume_yes=False):
+    try:
+        destination = resolve_managed_document(source_name, DOCS_DIR)
+    except DocumentManagementError as error:
+        print_issue(
+            "error",
+            str(error),
+            solution="Dosya adlarını görmek için /sources veya docs/ klasörünü kontrol et.",
+        )
+        return False
+
+    if not assume_yes and not confirm_document_removal(destination.name):
+        print_info("Silme işlemi iptal edildi.")
+        return True
+
+    try:
+        removed_path = remove_document(destination.name, DOCS_DIR)
+    except DocumentManagementError as error:
+        print_issue("error", str(error), solution="docs/ klasörünü kontrol et.")
+        return False
+    except Exception as error:
+        print_issue(
+            "error",
+            "Doküman silinemedi.",
+            solution="Dosya izinlerini ve docs/ klasörünü kontrol et.",
+            error=error,
+            debug=DEBUG,
+        )
+        return False
+
+    print_success(f"Doküman silindi · {removed_path.name}")
+    print_info("İndeksi güncellemek için /reindex veya local-rag reindex çalıştır.")
+    return True
+
+
 INFO_COMMAND_MESSAGES = {
     "/stats": (
         "Sistem bilgileri okunamadı.",
@@ -438,35 +522,77 @@ def execute_command(command):
     return run_command_safely(action, error_message, solution)
 
 
-def handle_command(command):
+def handle_command(command_line):
     global DEBUG
 
-    if command in ["/exit", "/quit", "q", "quit", "exit"]:
+    stripped_command = command_line.strip()
+    normalized_command = stripped_command.lower()
+    leading_command = (
+        normalized_command.split(maxsplit=1)[0]
+        if normalized_command
+        else ""
+    )
+
+    if normalized_command in ["/exit", "/quit", "q", "quit", "exit"]:
         return "exit"
 
-    if command == "/help":
+    if normalized_command == "/help":
         print_help()
         return "handled"
 
-    if command in INFO_COMMAND_MESSAGES:
-        execute_command(command)
+    if normalized_command in INFO_COMMAND_MESSAGES:
+        execute_command(normalized_command)
         return "handled"
 
-    if command == "/reindex":
-        execute_command(command)
+    if normalized_command == "/reindex":
+        execute_command(normalized_command)
         return "handled"
 
-    if command == "/debug on":
+    if normalized_command == "/debug on":
         DEBUG = True
         print_info("Debug modu açıldı.")
         return "handled"
 
-    if command == "/debug off":
+    if normalized_command == "/debug off":
         DEBUG = False
         print_info("Debug modu kapatıldı.")
         return "handled"
 
-    if command.startswith("/"):
+    if leading_command in {"/add", "/remove"}:
+        try:
+            arguments = shlex.split(stripped_command)
+        except ValueError as error:
+            print_issue(
+                "error",
+                "Komut argümanları okunamadı.",
+                solution="Boşluk içeren yolları çift tırnak içine al.",
+                error=error,
+                debug=DEBUG,
+            )
+            return "handled"
+
+        command_name = arguments[0].lower()
+
+        if command_name not in {"/add", "/remove"} or len(arguments) != 2:
+            usage = (
+                "/add <dosya-yolu>"
+                if command_name == "/add"
+                else "/remove <dosya-adı>"
+            )
+            print_issue(
+                "warning",
+                "Komut eksik veya hatalı.",
+                solution=f"Kullanım: {usage}",
+            )
+            return "handled"
+
+        if command_name == "/add":
+            add_document_command(arguments[1])
+        else:
+            remove_document_command(arguments[1])
+        return "handled"
+
+    if normalized_command.startswith("/"):
         print_issue(
             "warning",
             "Bilinmeyen komut.",
@@ -588,7 +714,7 @@ def main():
         if not question:
             continue
 
-        command_result = handle_command(question.lower())
+        command_result = handle_command(question)
 
         if command_result == "exit":
             break
@@ -643,6 +769,23 @@ def build_cli_parser():
     )
     ask_parser.add_argument("question", nargs="+", help="Sorulacak metin")
 
+    add_parser = subparsers.add_parser(
+        "add",
+        help="TXT veya PDF dosyasını docs/ klasörüne ekler.",
+    )
+    add_parser.add_argument("path", help="Eklenecek dosyanın yolu")
+
+    remove_parser = subparsers.add_parser(
+        "remove",
+        help="Dokümanı onay alarak docs/ klasöründen siler.",
+    )
+    remove_parser.add_argument("source_name", help="docs/ içindeki dosya adı")
+    remove_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Onay sorusunu atlayarak siler.",
+    )
+
     command_help = {
         "reindex": "docs/ klasörünü yeniden indeksler.",
         "stats": "İndeks ve sistem durumunu gösterir.",
@@ -671,6 +814,12 @@ def cli(argv=None):
     if args.command == "ask":
         question = " ".join(args.question)
         return 0 if answer_question(question) else 1
+
+    if args.command == "add":
+        return 0 if add_document_command(args.path) else 1
+
+    if args.command == "remove":
+        return 0 if remove_document_command(args.source_name, args.yes) else 1
 
     return 0 if execute_command(f"/{args.command}") else 1
 

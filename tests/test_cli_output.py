@@ -220,7 +220,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("İndeks durumu", output)
         self.assertIn("güncel", output)
 
-    def test_help_lists_model_and_config_commands(self):
+    def test_help_lists_model_config_and_document_commands(self):
         buffer = io.StringIO()
 
         with redirect_stdout(buffer):
@@ -229,6 +229,8 @@ class CliOutputTests(unittest.TestCase):
         output = buffer.getvalue()
         self.assertIn("/model", output)
         self.assertIn("/config", output)
+        self.assertIn("/add", output)
+        self.assertIn("/remove", output)
 
     def test_get_llm_preserves_foundry_output_only_in_debug_mode(self):
         main.DEBUG = True

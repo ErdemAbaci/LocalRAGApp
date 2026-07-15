@@ -62,6 +62,7 @@ local-rag-assistant/
 │   ├── cli_output.py
 │   ├── config.py
 │   ├── database.py
+│   ├── document_manager.py
 │   ├── embeddings.py
 │   ├── health.py
 │   ├── index_state.py
@@ -93,7 +94,7 @@ Uygulamanın ana giriş noktasıdır. Terminal arayüzünü ve bütün RAG karar
 Başlıca sorumlulukları:
 
 - Açılış banner'ını ve `rag>` prompt'unu gösterir.
-- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/doctor`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
+- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/doctor`, `/add`, `/remove`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
 - Kullanıcı sorusu için retrieval çalıştırır.
 - En iyi similarity skorunu kontrol eder.
 - Context'e girecek chunkları filtreler.
@@ -109,6 +110,17 @@ LLM uygulama açılır açılmaz yüklenmez. `get_llm()` fonksiyonu sayesinde ya
 `answer_question()` retrieval, cevap modu, fallback, kaynak ve performans gösterimini tek yerde tutar. Hem interaktif `rag>` döngüsü hem `local-rag ask` bu fonksiyonu çağırır; bu nedenle iki kullanım biçimi zamanla farklı RAG davranışları geliştirmez.
 
 `cli()` argparse alt komutlarını işler. Argümansız çağrıda interaktif oturumu açar; `ask` tek sorudan sonra çıkar, diğer alt komutları ortak komut çalıştırıcısına yönlendirir. Başarı `0`, operasyonel hata `1`, geçersiz terminal kullanımı `2` exit code üretir.
+
+### `app/document_manager.py`
+
+Kullanıcının doküman ekleme ve silme işlemlerini `main.py` içindeki terminal gösteriminden bağımsız yürütür:
+
+- `validate_document()`: Dosyanın varlığını, TXT/PDF türünü ve indekslenebilir metin içerdiğini doğrular. TXT için UTF-8 şarttır; görüntü tabanlı ve metinsiz PDF reddedilir.
+- `add_document()`: Dosyayı `docs/` klasörüne özel oluşturma moduyla kopyalar. Aynı isim varsa üzerine yazmaz; kopyalama/doğrulama yarıda kalırsa eksik hedefi temizler.
+- `resolve_managed_document()`: Silme hedefinin yalnızca bir dosya adı olmasını zorunlu kılar. Mutlak yollar ve `../` ile `docs/` dışına çıkış reddedilir.
+- `remove_document()`: Doğrulanan dosyayı siler. Kullanıcı onayı terminal katmanında alınır.
+
+Add/remove sonrasında reindex otomatik çalışmaz. Böylece embedding gibi pahalı bir işlem kullanıcı kararı dışında başlamaz. İndeks güncelliği sistemi değişikliği hemen gösterir ve kullanıcı `/reindex` veya `local-rag reindex` ile ne zaman güncelleyeceğini seçer.
 
 ### `pyproject.toml`
 
@@ -514,6 +526,9 @@ Tek seferlik terminal kullanımları:
 
 ```bash
 local-rag ask "RAG nedir?"
+local-rag add "/Users/kullanici/Documents/notlar.pdf"
+local-rag remove "notlar.pdf"
+local-rag remove "notlar.pdf" --yes
 local-rag reindex
 local-rag stats
 local-rag sources
@@ -535,6 +550,8 @@ CLI komutları:
 /config     Aktif RAG ayarlarını açıklamalarıyla salt okunur gösterir
 /sources    İndeksteki dosya, tür, sayfa ve chunk sayılarını gösterir
 /doctor     Doküman, indeks, embedding ve Foundry/model sağlığını kontrol eder
+/add <yol>  TXT veya PDF dosyasını doğrulayıp docs/ klasörüne kopyalar
+/remove <ad> Dokümanı onay alarak docs/ klasöründen siler
 /reindex    docs/ klasörünü yeniden işler
 /debug on   Retrieval, context ve hata detaylarını açar
 /debug off  Debug çıktısını kapatır
@@ -650,7 +667,7 @@ Son eval ve unit test çalışmasında:
 11 chunk
 2 kaynak dosya
 6/6 eval testi başarılı
-56/56 unit testi başarılı
+67/67 unit testi başarılı
 ```
 
 Başarılı kontroller:
@@ -669,9 +686,10 @@ Başarılı kontroller:
 - Yerel embedding snapshot yüklemesi: cache varken ağ isteği olmadan 384 boyut doğrulaması
 - Foundry başlangıcı: normal modda alt süreç çıktısının bastırılması, debug modunda korunması ve timeout hata yolu
 - `/model` ve `/config`: model yüklemeden cache/lazy-load durumu ile aktif ayarların gösterilmesi
-- `local-rag` paketi: editable kurulum, Türkçe sürüm/yardım, interaktif oturum, `ask`, `reindex` ve bilgi alt komutları
+- `local-rag` paketi: editable kurulum, Türkçe sürüm/yardım, interaktif oturum, `ask`, `add`, `remove`, `reindex` ve bilgi alt komutları
 - Ortak soru akışı ve exit code'lar: interaktif/tek-komut davranış birliği, başarı `0`, operasyonel hata `1`
 - İndeks güncelliği: SHA-256 manifesti, eklenen/değişen/silinen dosya ayrımı, cevap öncesi uyarı ve atomik rollback
+- Güvenli dosya yönetimi: TXT/PDF doğrulama, üzerine yazma ve path traversal koruması, silme onayı, `--yes` otomasyon seçeneği
 
 ## 12. Yakın roadmap
 
@@ -685,13 +703,13 @@ Başarılı kontroller:
 - `/model` ve `/config`: model/cache/lazy-load durumunu ve aktif ayarları salt okunur gösterir.
 - Kurulabilir CLI: `local-rag` interaktif oturumunu ve tek seferlik alt komutları standart Python entrypoint'iyle sunar.
 - İndeks güncelliği: dokümanların SHA-256 manifestini saklar; soru akışı, `/stats` ve `/doctor` üzerinden reindex ihtiyacını bildirir.
+- Güvenli dosya yönetimi: interaktif `/add`/`/remove` ile `local-rag add`/`remove` komutlarını doğrulama ve onay kurallarıyla sunar.
 
 ### V1'i tamamlama
 
-1. Güvenli `/add` ve onaylı `/remove` dosya yönetimini eklemek.
-2. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
-3. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
-4. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
+1. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
+2. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
+3. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
 
 ### V2 fikirleri
 
