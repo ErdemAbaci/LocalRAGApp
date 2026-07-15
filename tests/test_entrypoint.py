@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import main
+from app.index_state import IndexFreshness
 
 
 class CliEntrypointTests(unittest.TestCase):
@@ -60,9 +61,10 @@ class CliEntrypointTests(unittest.TestCase):
         }]
         buffer = io.StringIO()
 
-        with patch("main.get_top_chunks", return_value=chunks):
-            with redirect_stdout(buffer):
-                success = main.answer_question("Hava nasıl?")
+        with patch("main.get_index_freshness", return_value=IndexFreshness("current")):
+            with patch("main.get_top_chunks", return_value=chunks):
+                with redirect_stdout(buffer):
+                    success = main.answer_question("Hava nasıl?")
 
         self.assertTrue(success)
         self.assertIn("Bu bilgi verilen dokümanlarda yok.", buffer.getvalue())
@@ -79,14 +81,37 @@ class CliEntrypointTests(unittest.TestCase):
         }]
         buffer = io.StringIO()
 
-        with patch("main.get_top_chunks", return_value=chunks):
-            with patch("main.get_llm") as get_llm:
-                with redirect_stdout(buffer):
-                    success = main.answer_question("RAG nedir?")
+        with patch("main.get_index_freshness", return_value=IndexFreshness("current")):
+            with patch("main.get_top_chunks", return_value=chunks):
+                with patch("main.get_llm") as get_llm:
+                    with redirect_stdout(buffer):
+                        success = main.answer_question("RAG nedir?")
 
         self.assertTrue(success)
         self.assertIn("Doğrudan", buffer.getvalue())
         get_llm.assert_not_called()
+
+    def test_stale_index_warns_but_still_answers(self):
+        chunks = [{
+            "id": 1,
+            "source_name": "example.txt",
+            "chunk_text": "RAG açıklaması",
+            "score": 0.05,
+        }]
+        stale = IndexFreshness(status="stale", modified=("example.txt",))
+        buffer = io.StringIO()
+
+        with patch("main.get_index_freshness", return_value=stale):
+            with patch("main.get_top_chunks", return_value=chunks):
+                with redirect_stdout(buffer):
+                    success = main.answer_question("Hava nasıl?")
+
+        output = buffer.getvalue()
+        self.assertTrue(success)
+        self.assertIn("İndeks güncel değil", output)
+        self.assertIn("Değişen: example.txt", output)
+        self.assertIn("local-rag reindex", output)
+        self.assertIn("Bu bilgi verilen dokümanlarda yok.", output)
 
     def test_pyproject_registers_local_rag_console_script(self):
         project_root = Path(__file__).resolve().parents[1]

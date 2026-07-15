@@ -11,6 +11,7 @@ from app.cli_output import (
     print_issue,
     print_performance,
 )
+from app.index_state import IndexFreshness
 
 
 class CliOutputTests(unittest.TestCase):
@@ -197,6 +198,27 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("CHUNK_SIZE", output)
         self.assertIn("DOCS_DIR", output)
         self.assertIn("Salt okunur", output)
+
+    def test_stats_command_shows_index_freshness(self):
+        buffer = io.StringIO()
+        stats = {
+            "total_chunks": 11,
+            "source_count": 2,
+            "db_path": "data/rag.db",
+        }
+
+        with patch("main.get_chunk_stats", return_value=stats):
+            with patch(
+                "main.get_index_freshness",
+                return_value=IndexFreshness("current"),
+            ):
+                with redirect_stdout(buffer):
+                    result = main.handle_command("/stats")
+
+        output = buffer.getvalue()
+        self.assertEqual(result, "handled")
+        self.assertIn("İndeks durumu", output)
+        self.assertIn("güncel", output)
 
     def test_help_lists_model_and_config_commands(self):
         buffer = io.StringIO()

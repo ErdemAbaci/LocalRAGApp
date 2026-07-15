@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app import database
+from app.index_state import get_index_freshness
 from app.ingest import DOCS_DIR
 from app.llm import MODEL_ALIAS
 
@@ -149,6 +150,50 @@ def check_index(db_path=None):
     ]
 
 
+def check_index_freshness(docs_dir=None, db_path=None):
+    directory = Path(docs_dir) if docs_dir is not None else DOCS_DIR
+    path = Path(db_path) if db_path is not None else database.DB_PATH
+    freshness = get_index_freshness(directory, path)
+
+    if freshness.status == "current":
+        return HealthCheck(
+            name="İndeks güncelliği",
+            status="ok",
+            message="Dokümanlar indeksle eşleşiyor.",
+        )
+
+    if freshness.status == "stale":
+        return HealthCheck(
+            name="İndeks güncelliği",
+            status="warning",
+            message=f"İndeks güncel değil. {freshness.change_summary()}",
+            solution="/reindex veya local-rag reindex çalıştır.",
+        )
+
+    if freshness.status == "untracked":
+        return HealthCheck(
+            name="İndeks güncelliği",
+            status="warning",
+            message="İndeksin doküman özeti bulunamadı.",
+            solution="/reindex veya local-rag reindex çalıştır.",
+        )
+
+    if freshness.status == "missing":
+        return HealthCheck(
+            name="İndeks güncelliği",
+            status="warning",
+            message="Kontrol edilecek indeks bulunamadı.",
+            solution="/reindex veya local-rag reindex çalıştır.",
+        )
+
+    return HealthCheck(
+        name="İndeks güncelliği",
+        status="error",
+        message=f"Doküman değişiklikleri kontrol edilemedi: {freshness.error}",
+        solution="Dosya izinlerini kontrol et ve /doctor komutunu yeniden çalıştır.",
+    )
+
+
 def check_foundry(foundry_home=None, executable_finder=shutil.which):
     if executable_finder("foundry") is None:
         return [
@@ -248,6 +293,7 @@ def run_health_checks(
     executable_finder=shutil.which,
 ):
     checks = [check_documents(docs_dir=docs_dir)]
+    checks.append(check_index_freshness(docs_dir=docs_dir, db_path=db_path))
     checks.extend(check_index(db_path=db_path))
     checks.extend(
         check_foundry(

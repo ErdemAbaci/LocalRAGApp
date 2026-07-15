@@ -6,6 +6,7 @@ from pypdf import PdfReader
 
 from app.database import init_db, replace_chunks
 from app.embeddings import embed_texts
+from app.index_state import build_source_manifest, list_document_paths
 
 
 DOCS_DIR = Path("docs")
@@ -57,11 +58,11 @@ def read_pdf_file(file_path):
 def read_documents():
     documents = []
 
-    for file_path in DOCS_DIR.glob("*.txt"):
-        documents.append(read_txt_file(file_path))
-
-    for file_path in DOCS_DIR.glob("*.pdf"):
-        documents.extend(read_pdf_file(file_path))
+    for file_path in list_document_paths(DOCS_DIR):
+        if file_path.suffix.lower() == ".txt":
+            documents.append(read_txt_file(file_path))
+        elif file_path.suffix.lower() == ".pdf":
+            documents.extend(read_pdf_file(file_path))
 
     return documents
 
@@ -157,6 +158,7 @@ def align_chunk_start(text, desired_start, previous_end):
 
 def ingest_documents():
     init_db()
+    source_manifest = build_source_manifest(DOCS_DIR)
     documents = read_documents()
     indexed_chunks = []
 
@@ -181,5 +183,12 @@ def ingest_documents():
     if not indexed_chunks:
         raise ValueError("İndekslenecek metin bulunamadı; mevcut indeks korundu.")
 
-    replace_chunks(indexed_chunks)
+    final_manifest = build_source_manifest(DOCS_DIR)
+
+    if final_manifest != source_manifest:
+        raise RuntimeError(
+            "Dokümanlar indeksleme sırasında değişti; mevcut indeks korundu."
+        )
+
+    replace_chunks(indexed_chunks, source_manifest=source_manifest)
     return len(indexed_chunks)

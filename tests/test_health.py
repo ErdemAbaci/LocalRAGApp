@@ -9,7 +9,14 @@ from unittest.mock import patch
 
 import main
 from app import database
-from app.health import check_documents, check_foundry, check_index, run_health_checks
+from app.health import (
+    check_documents,
+    check_foundry,
+    check_index,
+    check_index_freshness,
+    run_health_checks,
+)
+from app.index_state import build_source_manifest
 from app.llm import MODEL_ALIAS
 
 
@@ -44,12 +51,15 @@ class HealthCheckTests(unittest.TestCase):
 
             with patch.object(database, "DB_PATH", db_path):
                 database.init_db()
-                database.insert_chunk(
-                    "notes.txt",
-                    "RAG notları",
-                    [0.1] * 384,
-                    source_type="txt",
-                    chunk_index=1,
+                database.replace_chunks(
+                    [{
+                        "source_name": "notes.txt",
+                        "chunk_text": "RAG notları",
+                        "embedding": [0.1] * 384,
+                        "source_type": "txt",
+                        "chunk_index": 1,
+                    }],
+                    source_manifest=build_source_manifest(docs_dir),
                 )
                 checks = run_health_checks(
                     docs_dir=docs_dir,
@@ -73,9 +83,36 @@ class HealthCheckTests(unittest.TestCase):
 
         by_name = {check.name: check for check in checks}
         self.assertEqual(by_name["Dokümanlar"].status, "error")
+        self.assertEqual(by_name["İndeks güncelliği"].status, "warning")
         self.assertEqual(by_name["Veritabanı"].status, "warning")
         self.assertEqual(by_name["Embedding indeksi"].status, "warning")
         self.assertIn("/reindex", by_name["Veritabanı"].solution)
+
+    def test_stale_index_reports_changed_document(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            docs_dir = root / "docs"
+            docs_dir.mkdir()
+            document_path = docs_dir / "notes.txt"
+            document_path.write_text("Eski RAG notları", encoding="utf-8")
+            db_path = root / "rag.db"
+
+            with patch.object(database, "DB_PATH", db_path):
+                database.init_db()
+                database.replace_chunks(
+                    [{
+                        "source_name": "notes.txt",
+                        "chunk_text": "Eski RAG notları",
+                        "embedding": [0.1] * 384,
+                    }],
+                    source_manifest=build_source_manifest(docs_dir),
+                )
+                document_path.write_text("Yeni RAG notları", encoding="utf-8")
+                check = check_index_freshness(docs_dir=docs_dir, db_path=db_path)
+
+        self.assertEqual(check.status, "warning")
+        self.assertIn("Değişen: notes.txt", check.message)
+        self.assertIn("local-rag reindex", check.solution)
 
     def test_invalid_embedding_is_reported(self):
         with tempfile.TemporaryDirectory() as temp_dir:

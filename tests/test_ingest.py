@@ -42,7 +42,20 @@ class AtomicReindexTests(unittest.TestCase):
 
             with patch.object(database, "DB_PATH", db_path):
                 database.init_db()
-                database.insert_chunk("old.txt", "eski içerik", [0.1, 0.2])
+                old_manifest = [{
+                    "source_name": "old.txt",
+                    "source_type": "txt",
+                    "file_size": 12,
+                    "sha256": "old-hash",
+                }]
+                database.replace_chunks(
+                    [{
+                        "source_name": "old.txt",
+                        "chunk_text": "eski içerik",
+                        "embedding": [0.1, 0.2],
+                    }],
+                    source_manifest=old_manifest,
+                )
 
                 invalid_chunks = [{
                     "source_name": "new.txt",
@@ -51,13 +64,23 @@ class AtomicReindexTests(unittest.TestCase):
                 }]
 
                 with self.assertRaises(sqlite3.IntegrityError):
-                    database.replace_chunks(invalid_chunks)
+                    database.replace_chunks(
+                        invalid_chunks,
+                        source_manifest=[{
+                            "source_name": "new.txt",
+                            "source_type": "txt",
+                            "file_size": 15,
+                            "sha256": "new-hash",
+                        }],
+                    )
 
                 chunks = database.get_all_chunks()
+                manifest = database.get_source_manifest()
 
             self.assertEqual(len(chunks), 1)
             self.assertEqual(chunks[0]["source_name"], "old.txt")
             self.assertEqual(chunks[0]["chunk_text"], "eski içerik")
+            self.assertEqual(manifest, old_manifest)
 
     def test_embedding_error_does_not_replace_index(self):
         documents = [{
@@ -69,11 +92,73 @@ class AtomicReindexTests(unittest.TestCase):
 
         with (
             patch("app.ingest.init_db"),
+            patch("app.ingest.build_source_manifest", return_value=[]),
             patch("app.ingest.read_documents", return_value=documents),
             patch("app.ingest.embed_texts", side_effect=RuntimeError("embedding hatası")),
             patch("app.ingest.replace_chunks") as replace_mock,
         ):
             with self.assertRaises(RuntimeError):
+                ingest_documents()
+
+        replace_mock.assert_not_called()
+
+    def test_ingest_replaces_chunks_and_manifest_together(self):
+        manifest = [{
+            "source_name": "notes.txt",
+            "source_type": "txt",
+            "file_size": 24,
+            "sha256": "stable-hash",
+        }]
+        documents = [{
+            "source_name": "notes.txt",
+            "source_type": "txt",
+            "page_number": None,
+            "text": "RAG dokümanlardan cevap üretir.",
+        }]
+
+        with (
+            patch("app.ingest.init_db"),
+            patch("app.ingest.build_source_manifest", side_effect=[manifest, manifest]),
+            patch("app.ingest.read_documents", return_value=documents),
+            patch("app.ingest.embed_texts", return_value=[[0.1] * 384]),
+            patch("app.ingest.replace_chunks") as replace_mock,
+        ):
+            chunk_count = ingest_documents()
+
+        self.assertEqual(chunk_count, 1)
+        self.assertEqual(replace_mock.call_args.kwargs["source_manifest"], manifest)
+
+    def test_documents_changed_during_ingest_preserve_old_index(self):
+        original_manifest = [{
+            "source_name": "notes.txt",
+            "source_type": "txt",
+            "file_size": 24,
+            "sha256": "before-hash",
+        }]
+        changed_manifest = [{
+            "source_name": "notes.txt",
+            "source_type": "txt",
+            "file_size": 31,
+            "sha256": "after-hash",
+        }]
+        documents = [{
+            "source_name": "notes.txt",
+            "source_type": "txt",
+            "page_number": None,
+            "text": "RAG dokümanlardan cevap üretir.",
+        }]
+
+        with (
+            patch("app.ingest.init_db"),
+            patch(
+                "app.ingest.build_source_manifest",
+                side_effect=[original_manifest, changed_manifest],
+            ),
+            patch("app.ingest.read_documents", return_value=documents),
+            patch("app.ingest.embed_texts", return_value=[[0.1] * 384]),
+            patch("app.ingest.replace_chunks") as replace_mock,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "indeksleme sırasında değişti"):
                 ingest_documents()
 
         replace_mock.assert_not_called()

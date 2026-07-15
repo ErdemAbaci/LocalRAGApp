@@ -34,6 +34,15 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS source_manifest (
+        source_name TEXT PRIMARY KEY,
+        source_type TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL
+    )
+    """)
+
     ensure_chunk_metadata_columns(cursor)
 
     conn.commit()
@@ -97,7 +106,7 @@ def insert_chunk(
     conn.close()
 
 
-def replace_chunks(chunks):
+def replace_chunks(chunks, source_manifest=None):
     conn = get_connection()
 
     try:
@@ -124,6 +133,27 @@ def replace_chunks(chunks):
             )
             for chunk in chunks
         ])
+
+        if source_manifest is not None:
+            cursor.execute("DELETE FROM source_manifest")
+            cursor.executemany("""
+            INSERT INTO source_manifest (
+                source_name,
+                source_type,
+                file_size,
+                sha256
+            )
+            VALUES (?, ?, ?, ?)
+            """, [
+                (
+                    source["source_name"],
+                    source["source_type"],
+                    source["file_size"],
+                    source["sha256"],
+                )
+                for source in source_manifest
+            ])
+
         conn.commit()
     except Exception:
         conn.rollback()
@@ -165,6 +195,44 @@ def get_all_chunks():
         })
 
     return chunks
+
+
+def get_source_manifest(db_path=None):
+    path = Path(db_path) if db_path is not None else DB_PATH
+
+    if not path.exists():
+        return []
+
+    conn = sqlite3.connect(path)
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='source_manifest'"
+        )
+
+        if cursor.fetchone() is None:
+            return []
+
+        cursor.execute("""
+        SELECT source_name, source_type, file_size, sha256
+        FROM source_manifest
+        ORDER BY source_name
+        """)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    return [
+        {
+            "source_name": row[0],
+            "source_type": row[1],
+            "file_size": row[2],
+            "sha256": row[3],
+        }
+        for row in rows
+    ]
 
 
 def get_chunk_stats():

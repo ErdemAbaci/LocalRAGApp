@@ -64,6 +64,7 @@ local-rag-assistant/
 │   ├── database.py
 │   ├── embeddings.py
 │   ├── health.py
+│   ├── index_state.py
 │   ├── ingest.py
 │   ├── llm.py
 │   ├── prompts.py
@@ -99,6 +100,7 @@ Başlıca sorumlulukları:
 - Extractive veya generative cevap arasında karar verir.
 - LLM cevabı başarısızsa en iyi chunk ile fallback yapar.
 - Kaynakları, skorları ve süreleri ekrana yazdırır.
+- İndeks dokümanlardan geri kaldıysa cevap öncesinde reindex uyarısı gösterir.
 
 LLM uygulama açılır açılmaz yüklenmez. `get_llm()` fonksiyonu sayesinde yalnızca ilk generative cevap gerektiğinde yüklenir ve aynı oturumda tekrar kullanılır. Buna lazy loading denir.
 
@@ -189,12 +191,15 @@ SQLite veritabanı işlemlerinden sorumludur. Veritabanı yolu `data/rag.db` şe
 | `chunk_text` | Chunk'ın gerçek metni |
 | `embedding` | JSON string olarak saklanan embedding vektörü |
 
+`source_manifest` tablosu ise her desteklenen dokümanın adını, türünü, dosya boyutunu ve SHA-256 özetini tutar. Bu tablo “şu anki `docs/` klasörü, bu indeksi üreten dosyalarla aynı mı?” sorusuna cevap verir.
+
 Önemli fonksiyonlar:
 
 - `init_db()`: Tabloyu oluşturur ve eksik metadata kolonlarını ekler.
 - `insert_chunk()`: Bir chunk ve metadata'sını kaydeder.
-- `replace_chunks()`: Eski indeksi silme ve yeni chunkları ekleme işlemini tek transaction içinde yapar. Ekleme başarısız olursa rollback ile eski indeks korunur.
+- `replace_chunks()`: Eski chunk ve manifesti yenileriyle tek transaction içinde değiştirir. Herhangi bir ekleme başarısız olursa rollback ile eski indeks ve manifest birlikte korunur.
 - `get_all_chunks()`: Retrieval için bütün chunkları okur.
+- `get_source_manifest()`: İndeksi üreten doküman özetlerini okur; eski şemalarda güvenli biçimde boş liste döndürür.
 - `get_chunk_stats()`: `/stats` komutuna chunk ve kaynak sayısını verir.
 - `get_indexed_sources()`: `/sources` komutuna dosya bazında tür, sayfa ve chunk özetini verir. Veritabanı dosyası varsa sorgu öncesi şemayı güvenli şekilde hazırlar.
 
@@ -205,6 +210,7 @@ SQLite veritabanı işlemlerinden sorumludur. Veritabanı yolu `data/rag.db` şe
 `/doctor` komutunun sağlık kontrollerini terminal gösteriminden bağımsız olarak yürütür:
 
 - `docs/` klasörü ile TXT/PDF varlığını kontrol eder.
+- Doküman manifestini mevcut dosyalarla karşılaştırarak indeksin güncel olup olmadığını kontrol eder.
 - SQLite indeksinin okunabildiğini, kaynak ve chunk sayılarını doğrular.
 - Embeddinglerin 384 boyutlu ve sonlu sayılardan oluştuğunu denetler.
 - `foundry` terminal aracının ve model cache dizininin varlığını kontrol eder.
@@ -212,19 +218,34 @@ SQLite veritabanı işlemlerinden sorumludur. Veritabanı yolu `data/rag.db` şe
 
 Bu kontrol model yüklemez, model indirmez ve inference yapmaz. Her sonuç `ok`, `warning` veya `error` durumuyla birlikte gerektiğinde çözüm önerisi taşır.
 
+### `app/index_state.py`
+
+İndeks ile `docs/` klasörünün aynı veri sürümünü temsil edip etmediğini izler. TXT ve PDF dosyalarını ada göre sıralar, dosya içeriğini bloklar halinde okuyup SHA-256 özeti üretir ve SQLite'taki `source_manifest` ile karşılaştırır.
+
+Olası durumlar:
+
+- `current`: Dokümanlar indeksle eşleşir.
+- `stale`: En az bir dosya eklenmiş, değiştirilmiş veya silinmiştir.
+- `untracked`: Eski indeks vardır ama henüz manifest kaydı yoktur.
+- `missing`: Veritabanı henüz yoktur.
+- `error`: Dosya veya manifest okunamamıştır.
+
+Karşılaştırma yalnızca dosya tarihine dayanmaz. İçerik özeti kullanıldığı için dosya zamanı korunmuş olsa bile gerçek içerik değişikliği algılanır.
+
 ### `app/ingest.py`
 
 Dokümanları RAG sisteminin arayabileceği hale getirir. Bu işleme ingestion denir.
 
 Akış:
 
-1. `docs/` içindeki `.txt` ve `.pdf` dosyalarını bulur.
+1. `docs/` içindeki `.txt` ve `.pdf` dosyalarının ilk manifestini üretir.
 2. TXT dosyasını UTF-8 metin olarak okur.
 3. PDF dosyasını `pypdf.PdfReader` ile sayfa sayfa okur.
 4. Her sayfa/paragraf metnini chunklara böler.
 5. Chunkları toplu olarak embedding'e çevirir.
 6. Bütün yeni indeks kayıtlarını bellekte hazırlar.
-7. Hazır kayıtları tek transaction ile SQLite'a yazar.
+7. Doküman manifestini yeniden üretir; ilk manifestten farklıysa yazmayı iptal eder.
+8. Chunkları ve manifesti tek transaction ile SQLite'a yazar.
 
 Chunk ayarları:
 
@@ -239,7 +260,7 @@ Overlap, iki ardışık chunk arasında bir miktar ortak metin bırakır. Chunk 
 
 Metni başarıyla çıkarılan bozuk PDF'lerdeki bilinen `Ignoring wrong pointing object` mesajları kullanıcı terminalini kirletmemesi için filtrelenir. Gerçek okuma hataları exception olarak görünmeye devam eder.
 
-`/reindex` komutu doğrudan `ingest_documents()` fonksiyonunu çağırır. Doküman okuma veya embedding üretme başarısız olursa veritabanına dokunulmaz. SQLite yazımı sırasında hata oluşursa transaction geri alınır ve önceki indeks kullanılmaya devam eder.
+`/reindex` komutu doğrudan `ingest_documents()` fonksiyonunu çağırır. Doküman okuma veya embedding üretme başarısız olursa veritabanına dokunulmaz. Bir dosya indeksleme sürerken değişirse tutarsız bir indeks yazılmaz. SQLite yazımı sırasında hata oluşursa chunklar ve manifest birlikte rollback edilir; önceki indeks kullanılmaya devam eder.
 
 ### `app/embeddings.py`
 
@@ -629,7 +650,7 @@ Son eval ve unit test çalışmasında:
 11 chunk
 2 kaynak dosya
 6/6 eval testi başarılı
-47/47 unit testi başarılı
+56/56 unit testi başarılı
 ```
 
 Başarılı kontroller:
@@ -641,7 +662,7 @@ Başarılı kontroller:
 - Veri madenciliği sorusunda doğru PDF kaynağı
 - Hava sorusunda threshold altında kalma
 - `/sources` komutu: dosya/tür/sayfa/chunk özeti, boş indeks ve eski/eksik şema güvenliği
-- `/doctor` komutu: 5 sağlık kontrolü başarılı, model yüklemeden Foundry/Phi-4 cache doğrulaması
+- `/doctor` komutu: 6 sağlık kontrolü başarılı, indeks güncelliği ile Foundry/Phi-4 cache doğrulaması
 - Standart hata çıktıları: çözüm önerileri, debug ayrıntıları ve hata sonrası oturumun devam etmesi
 - Rich terminal görünümü: semantik cevap renkleri, Türkçe mod/süre etiketleri, ortak sol hiza, dar terminal ve TTY spinner kontrolü
 - LLM cevap temizliği: köşeli/parantezli tekli, aralıklı ve listeli parça atıflarının kaldırılması
@@ -650,6 +671,7 @@ Başarılı kontroller:
 - `/model` ve `/config`: model yüklemeden cache/lazy-load durumu ile aktif ayarların gösterilmesi
 - `local-rag` paketi: editable kurulum, Türkçe sürüm/yardım, interaktif oturum, `ask`, `reindex` ve bilgi alt komutları
 - Ortak soru akışı ve exit code'lar: interaktif/tek-komut davranış birliği, başarı `0`, operasyonel hata `1`
+- İndeks güncelliği: SHA-256 manifesti, eklenen/değişen/silinen dosya ayrımı, cevap öncesi uyarı ve atomik rollback
 
 ## 12. Yakın roadmap
 
@@ -662,14 +684,14 @@ Başarılı kontroller:
 - Sessiz Foundry başlangıcı: normal kullanıcı görünümünde servis logunu gizler, debug modunda ham çıktıyı korur.
 - `/model` ve `/config`: model/cache/lazy-load durumunu ve aktif ayarları salt okunur gösterir.
 - Kurulabilir CLI: `local-rag` interaktif oturumunu ve tek seferlik alt komutları standart Python entrypoint'iyle sunar.
+- İndeks güncelliği: dokümanların SHA-256 manifestini saklar; soru akışı, `/stats` ve `/doctor` üzerinden reindex ihtiyacını bildirir.
 
 ### V1'i tamamlama
 
-1. Doküman değişikliklerini algılayıp reindex gerektiğini bildirmek.
-2. Güvenli `/add` ve onaylı `/remove` dosya yönetimini eklemek.
-3. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
-4. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
-5. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
+1. Güvenli `/add` ve onaylı `/remove` dosya yönetimini eklemek.
+2. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
+3. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
+4. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
 
 ### V2 fikirleri
 

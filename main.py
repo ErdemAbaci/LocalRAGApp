@@ -31,6 +31,7 @@ from app.embeddings import (
     is_embedding_model_loaded,
 )
 from app.health import check_foundry, run_health_checks
+from app.index_state import get_index_freshness
 from app.retrieval import get_top_chunks
 from app.prompts import build_rag_messages
 from app.llm import LocalLLM, MODEL_ALIAS, is_valid_answer
@@ -177,6 +178,7 @@ def print_config_info():
 
 def print_stats():
     stats = get_chunk_stats()
+    freshness = get_index_freshness(DOCS_DIR, DB_PATH)
     short_embedding_name = EMBEDDING_MODEL_NAME.rsplit("/", maxsplit=1)[-1]
 
     print_table(
@@ -185,6 +187,7 @@ def print_stats():
         [
             ("Chunk sayısı", stats["total_chunks"]),
             ("Kaynak dosya", stats["source_count"]),
+            ("İndeks durumu", freshness.display_status()),
             ("Veritabanı", stats["db_path"]),
             ("Embedding", short_embedding_name),
             ("LLM", MODEL_ALIAS),
@@ -195,6 +198,33 @@ def print_stats():
             ("Context threshold", CONTEXT_SCORE_THRESHOLD),
         ],
     )
+
+
+def warn_if_index_is_stale():
+    freshness = get_index_freshness(DOCS_DIR, DB_PATH)
+
+    if freshness.status == "stale":
+        print_issue(
+            "warning",
+            f"İndeks güncel değil. {freshness.change_summary()}",
+            solution="/reindex veya local-rag reindex çalıştır.",
+        )
+    elif freshness.status == "untracked":
+        print_issue(
+            "warning",
+            "İndeksin hangi dokümanlardan üretildiği bilinmiyor.",
+            solution="/reindex veya local-rag reindex çalıştır.",
+        )
+    elif freshness.status == "error":
+        print_issue(
+            "warning",
+            "Doküman değişiklikleri kontrol edilemedi.",
+            solution="/doctor çalıştır.",
+            error=RuntimeError(freshness.error),
+            debug=DEBUG,
+        )
+
+    return freshness
 
 
 def print_indexed_sources():
@@ -453,6 +483,8 @@ def answer_question(question):
     if not question:
         print_issue("warning", "Soru boş olamaz.")
         return False
+
+    warn_if_index_is_stale()
 
     total_start_time = time.perf_counter()
     retrieval_start_time = time.perf_counter()
