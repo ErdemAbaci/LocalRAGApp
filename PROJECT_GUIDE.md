@@ -734,11 +734,12 @@ Başarılı kontroller:
 - Güvenli dosya yönetimi: interaktif `/add`/`/remove` ile `local-rag add`/`remove` komutlarını doğrulama ve onay kurallarıyla sunar.
 - Genişletilmiş eval: `cybersecurity.txt` ile kaynak, skor ve chunk kavramlarını doğrular.
 - Model benchmark ve yapılandırma: süre/kalite raporu üretir, `LOCAL_RAG_MODEL` ile kod değiştirmeden model seçer.
+- Ana README: kurulum, kullanım, mimari, gerçek benchmark sonuçları, testler, sınırlamalar ve V2 yol haritasını tek giriş noktasında sunar.
 
-### V1'i tamamlama
+### V2'ye geçiş
 
-1. Ana README'yi kullanım, mimari, benchmark sonucu ve portfolyo sunumu için düzenlemek.
-2. V2 için FastAPI veya Streamlit yönünü seçmek.
+V1 hedefleri tamamlandı. Sıradaki adım FastAPI veya Streamlit yönünü seçmek ve
+mevcut CLI akışını bozmadan ilk küçük V2 arayüzünü oluşturmaktır.
 
 ### V2 fikirleri
 
