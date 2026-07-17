@@ -231,6 +231,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("/config", output)
         self.assertIn("/add", output)
         self.assertIn("/remove", output)
+        self.assertIn("/benchmark", output)
 
     def test_get_llm_preserves_foundry_output_only_in_debug_mode(self):
         main.DEBUG = True

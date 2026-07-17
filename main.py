@@ -41,7 +41,13 @@ from app.health import check_foundry, run_health_checks
 from app.index_state import get_index_freshness
 from app.retrieval import get_top_chunks
 from app.prompts import build_rag_messages
-from app.llm import LocalLLM, MODEL_ALIAS, is_valid_answer
+from app.llm import (
+    DEFAULT_MODEL_ALIAS,
+    LocalLLM,
+    MODEL_ALIAS,
+    get_model_alias_source,
+    is_valid_answer,
+)
 from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, DOCS_DIR, ingest_documents
 
 DEBUG = False
@@ -75,6 +81,7 @@ def print_help():
             ("/doctor", "Sistem bileşenlerinin sağlık durumunu kontrol eder"),
             ("/add <yol>", "TXT veya PDF dosyasını docs/ klasörüne ekler"),
             ("/remove <dosya>", "Dokümanı onay alarak docs/ klasöründen siler"),
+            ("/benchmark [model]", "Modellerin süre ve kalitesini karşılaştırır"),
             ("/reindex", "docs/ klasörünü yeniden indeksler"),
             ("/debug on", "Teknik debug çıktısını açar"),
             ("/debug off", "Teknik debug çıktısını kapatır"),
@@ -113,6 +120,11 @@ def print_model_info():
         ],
         [
             ("Chat modeli", MODEL_ALIAS, "aktif alias"),
+            (
+                "Model seçimi",
+                get_model_alias_source(),
+                f"varsayılan: {DEFAULT_MODEL_ALIAS}",
+            ),
             ("Çalışma zamanı", "Microsoft Foundry Local", foundry_status),
             ("Chat model cache", MODEL_ALIAS, model_cache_status),
             (
@@ -178,6 +190,11 @@ def print_config_info():
             ),
             ("CHUNK_SIZE", CHUNK_SIZE, "Bir chunk'ın hedef maksimum karakteri"),
             ("CHUNK_OVERLAP", CHUNK_OVERLAP, "Ardışık chunklar arasındaki tekrar"),
+            (
+                "LOCAL_RAG_MODEL",
+                MODEL_ALIAS,
+                f"Chat modeli; varsayılan {DEFAULT_MODEL_ALIAS}",
+            ),
             ("DOCS_DIR", DOCS_DIR, "İndekslenecek doküman klasörü"),
             ("DB_PATH", DB_PATH, "Üretilen SQLite indeks yolu"),
         ],
@@ -482,6 +499,103 @@ def remove_document_command(source_name, assume_yes=False):
     return True
 
 
+def print_benchmark_report(report, report_path):
+    summary_rows = []
+    answer_rows = []
+
+    for model_result in report["models"]:
+        if model_result["status"] == "error":
+            summary_rows.append((
+                model_result["model"],
+                "hata",
+                f"{model_result['load_seconds']:.3f}",
+                "-",
+                "-",
+                "-",
+                "-",
+            ))
+            answer_rows.append((
+                model_result["model"],
+                "model yükleme",
+                model_result["error"],
+            ))
+            continue
+
+        summary = model_result["summary"]
+        summary_rows.append((
+            model_result["model"],
+            "kısmi" if model_result["status"] == "partial" else "tamamlandı",
+            f"{model_result['load_seconds']:.3f}",
+            f"{summary['cold_generation_seconds']:.3f}",
+            f"{summary['warm_generation_seconds']:.3f}",
+            f"{summary['valid_case_count']}/{summary['case_count']}",
+            f"%{summary['average_term_coverage'] * 100:.0f}",
+        ))
+
+        for case in model_result["cases"]:
+            answer = case["answer"] or case["runs"][-1]["error"] or "cevap yok"
+
+            if len(answer) > 500:
+                answer = f"{answer[:497].rstrip()}..."
+
+            answer_rows.append((
+                model_result["model"],
+                case["question"],
+                answer,
+            ))
+
+    print_table(
+        "Model benchmark",
+        [
+            ("Model", "bold cyan", "left", True),
+            ("Durum",),
+            ("Yükleme", None, "right", True),
+            ("İlk yanıt", None, "right", True),
+            ("Sıcak yanıt", None, "right", True),
+            ("Geçerli", None, "right", True),
+            ("Terim", None, "right", True),
+        ],
+        summary_rows,
+    )
+    print_table(
+        "Benchmark cevapları",
+        [
+            ("Model", "bold cyan", "left", True),
+            ("Soru", "bold"),
+            ("Cevap",),
+        ],
+        answer_rows,
+        footer=f"Ayrıntılı JSON raporu: {report_path}",
+    )
+
+
+def run_benchmark_command(model_aliases=None):
+    from app.benchmark import BenchmarkPreparationError, run_model_benchmark
+
+    try:
+        with activity("Model benchmark çalıştırılıyor..."):
+            report, report_path = run_model_benchmark(model_aliases)
+    except BenchmarkPreparationError as error:
+        print_issue(
+            "error",
+            str(error),
+            solution="Önce local-rag reindex ve python eval.py çalıştır.",
+        )
+        return False
+    except Exception as error:
+        print_issue(
+            "error",
+            "Model benchmark tamamlanamadı.",
+            solution="/doctor ile modelleri kontrol et; gerekirse /debug on kullan.",
+            error=error,
+            debug=DEBUG,
+        )
+        return False
+
+    print_benchmark_report(report, report_path)
+    return all(model["status"] == "ok" for model in report["models"])
+
+
 INFO_COMMAND_MESSAGES = {
     "/stats": (
         "Sistem bilgileri okunamadı.",
@@ -590,6 +704,22 @@ def handle_command(command_line):
             add_document_command(arguments[1])
         else:
             remove_document_command(arguments[1])
+        return "handled"
+
+    if leading_command == "/benchmark":
+        try:
+            arguments = shlex.split(stripped_command)
+        except ValueError as error:
+            print_issue(
+                "error",
+                "Model alias'ları okunamadı.",
+                solution="Boşluk içeren değerleri çift tırnak içine al.",
+                error=error,
+                debug=DEBUG,
+            )
+            return "handled"
+
+        run_benchmark_command(arguments[1:] or [MODEL_ALIAS])
         return "handled"
 
     if normalized_command.startswith("/"):
@@ -786,6 +916,17 @@ def build_cli_parser():
         help="Onay sorusunu atlayarak siler.",
     )
 
+    benchmark_parser = subparsers.add_parser(
+        "benchmark",
+        help="Modellerin üretim süresi ve cevap kalitesini karşılaştırır.",
+    )
+    benchmark_parser.add_argument(
+        "--models",
+        nargs="+",
+        default=[MODEL_ALIAS],
+        help=f"Karşılaştırılacak model alias'ları (varsayılan: {MODEL_ALIAS})",
+    )
+
     command_help = {
         "reindex": "docs/ klasörünü yeniden indeksler.",
         "stats": "İndeks ve sistem durumunu gösterir.",
@@ -820,6 +961,9 @@ def cli(argv=None):
 
     if args.command == "remove":
         return 0 if remove_document_command(args.source_name, args.yes) else 1
+
+    if args.command == "benchmark":
+        return 0 if run_benchmark_command(args.models) else 1
 
     return 0 if execute_command(f"/{args.command}") else 1
 

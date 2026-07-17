@@ -1,16 +1,41 @@
+import os
 import re
 import subprocess
 import time
+from collections import Counter
+from contextlib import contextmanager
 
+import foundry_local.api as foundry_api
 import openai
 from foundry_local import FoundryLocalManager
 
 from app.config import MIN_GENERATIVE_ANSWER_CHARS
 
 
-MODEL_ALIAS = "phi-4-mini"
+DEFAULT_MODEL_ALIAS = "phi-4-mini"
+MODEL_ALIAS_ENV_VAR = "LOCAL_RAG_MODEL"
+
+
+def get_model_alias(environ=None):
+    environment = os.environ if environ is None else environ
+    configured_alias = environment.get(MODEL_ALIAS_ENV_VAR, "").strip()
+    return configured_alias or DEFAULT_MODEL_ALIAS
+
+
+def get_model_alias_source(environ=None):
+    environment = os.environ if environ is None else environ
+    return (
+        MODEL_ALIAS_ENV_VAR
+        if environment.get(MODEL_ALIAS_ENV_VAR, "").strip()
+        else "varsayılan"
+    )
+
+
+MODEL_ALIAS = get_model_alias()
 FOUNDRY_START_ATTEMPTS = 100
 FOUNDRY_START_INTERVAL_SECONDS = 0.1
+FOUNDRY_STATUS_TIMEOUT_SECONDS = 15
+FOUNDRY_HTTP_TIMEOUT_SECONDS = 120
 
 ANSWER_STOP_MARKERS = [
     "Kaynak:",
@@ -85,6 +110,23 @@ def clean_answer(answer):
     return cleaned or original_answer
 
 
+def has_excessive_repetition(answer):
+    words = re.findall(r"\b\w+\b", answer.casefold(), flags=re.UNICODE)
+
+    if len(words) < 12:
+        return False
+
+    word_counts = Counter(words)
+    most_common_count = word_counts.most_common(1)[0][1]
+
+    if most_common_count >= 8 and most_common_count / len(words) > 0.25:
+        return True
+
+    trigrams = list(zip(words, words[1:], words[2:]))
+    trigram_counts = Counter(trigrams)
+    return bool(trigram_counts and trigram_counts.most_common(1)[0][1] >= 3)
+
+
 def is_valid_answer(answer):
     if not answer:
         return False
@@ -100,41 +142,87 @@ def is_valid_answer(answer):
     without_citations = remove_citations(cleaned)
     without_prefix = remove_answer_prefix(without_citations)
 
+    if has_excessive_repetition(without_prefix):
+        return False
+
     return len(without_prefix) >= MIN_GENERATIVE_ANSWER_CHARS
 
 
+def get_foundry_service_uri():
+    try:
+        result = subprocess.run(
+            ["foundry", "service", "status"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=FOUNDRY_STATUS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            "Foundry Local servis durumu zamanında alınamadı."
+        ) from error
+
+    match = re.search(
+        r"http://(?:[a-zA-Z0-9.-]+|\d{1,3}(?:\.\d{1,3}){3}):\d+",
+        result.stdout,
+    )
+    return match.group(0) if match else None
+
+
+@contextmanager
+def safe_foundry_service_lookup():
+    original_lookup = foundry_api.get_service_uri
+    foundry_api.get_service_uri = get_foundry_service_uri
+
+    try:
+        yield
+    finally:
+        foundry_api.get_service_uri = original_lookup
+
+
 def create_foundry_manager(show_startup_output=False):
-    if show_startup_output:
-        return FoundryLocalManager()
+    with safe_foundry_service_lookup():
+        manager = FoundryLocalManager(
+            bootstrap=False,
+            timeout=FOUNDRY_HTTP_TIMEOUT_SECONDS,
+        )
 
-    manager = FoundryLocalManager(bootstrap=False)
+        if manager.is_service_running():
+            return manager
 
-    if manager.is_service_running():
-        return manager
+        process_options = {}
 
-    with subprocess.Popen(
-        ["foundry", "service", "start"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ):
-        for _ in range(FOUNDRY_START_ATTEMPTS):
-            if manager.is_service_running():
-                return manager
+        if not show_startup_output:
+            process_options = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
 
-            time.sleep(FOUNDRY_START_INTERVAL_SECONDS)
+        with subprocess.Popen(
+            ["foundry", "service", "start"],
+            **process_options,
+        ):
+            for _ in range(FOUNDRY_START_ATTEMPTS):
+                if manager.is_service_running():
+                    return manager
+
+                time.sleep(FOUNDRY_START_INTERVAL_SECONDS)
 
     raise RuntimeError("Foundry Local servisi zamanında başlatılamadı.")
 
 
 class LocalLLM:
-    def __init__(self, show_startup_output=False):
+    def __init__(self, show_startup_output=False, model_alias=None):
+        self.model_alias = model_alias or MODEL_ALIAS
         self.manager = create_foundry_manager(show_startup_output)
 
-        self.model_info = self.manager.load_model(MODEL_ALIAS)
+        self.model_info = self.manager.load_model(self.model_alias)
 
         self.client = openai.OpenAI(
             base_url=self.manager.endpoint,
-            api_key=self.manager.api_key
+            api_key=self.manager.api_key,
+            timeout=FOUNDRY_HTTP_TIMEOUT_SECONDS,
         )
 
     def generate_answer(self, messages):

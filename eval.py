@@ -15,6 +15,7 @@ ANSWER_QUALITY_CASES = [
     ("", False),
     ("Kısa cevap", False),
     ("Kaynak: [Parça 1-3]", False),
+    ("Gönderinin " * 18, False),
     ("Veri madenciliği, verilerden anlamlı bilgi çıkarma sürecidir.", True),
 ]
 
@@ -74,10 +75,26 @@ def evaluate_relevant_case(case, results):
             f"minimum={min_score:.4f}"
         )
 
-    return True, (
+    expected_chunk_terms = case.get("expected_chunk_terms", [])
+    normalized_chunk = best_result["chunk_text"].casefold()
+    missing_terms = [
+        term
+        for term in expected_chunk_terms
+        if term.casefold() not in normalized_chunk
+    ]
+
+    if missing_terms:
+        return False, f"en iyi chunk içinde eksik kavramlar: {', '.join(missing_terms)}"
+
+    detail = (
         f"kaynak={best_result['source_name']}, "
         f"skor={best_result['score']:.4f}"
     )
+
+    if expected_chunk_terms:
+        detail += f", kavram={len(expected_chunk_terms)}/{len(expected_chunk_terms)}"
+
+    return True, detail
 
 
 def evaluate_not_found_case(case, results):

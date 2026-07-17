@@ -21,8 +21,46 @@
     "min_score": 0.40
   },
   {
+    "name": "security_goals",
+    "question": "Bilgi güvenliğinin üç temel hedefi nelerdir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.40,
+    "expected_chunk_terms": ["gizlilik", "bütünlük", "erişilebilirlik"]
+  },
+  {
+    "name": "phishing_definition",
+    "question": "Kimlik avı mesajlarında gönderen adresi ve bağlantılar nasıl kontrol edilmelidir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.40,
+    "expected_chunk_terms": ["gönderen", "bağlantı", "çok faktörlü"]
+  },
+  {
+    "name": "multi_factor_authentication",
+    "question": "Çok faktörlü kimlik doğrulama neden kullanılır?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.40,
+    "expected_chunk_terms": ["iki veya daha fazla", "parola", "güvenlik anahtarı"]
+  },
+  {
+    "name": "backup_rule",
+    "question": "Güvenli yedekleme için 3-2-1 kuralı ne önerir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.40,
+    "expected_chunk_terms": ["üç kopya", "iki farklı ortamda", "geri yükleme"]
+  },
+  {
     "name": "out_of_scope_weather",
     "question": "Hava nasıl?",
+    "expectation": "not_found",
+    "max_score": 0.20
+  },
+  {
+    "name": "out_of_scope_cooking",
+    "question": "Çikolatalı kek kaç derecede pişirilir?",
     "expectation": "not_found",
     "max_score": 0.20
   }

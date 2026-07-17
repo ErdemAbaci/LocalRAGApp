@@ -52,6 +52,25 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(main.DEBUG)
 
+    def test_benchmark_forwards_selected_models(self):
+        with patch("main.run_benchmark_command", return_value=True) as benchmark:
+            exit_code = main.cli([
+                "benchmark",
+                "--models",
+                "phi-4-mini",
+                "phi-3.5-mini",
+            ])
+
+        self.assertEqual(exit_code, 0)
+        benchmark.assert_called_once_with(["phi-4-mini", "phi-3.5-mini"])
+
+    def test_interactive_benchmark_uses_active_model_by_default(self):
+        with patch("main.run_benchmark_command", return_value=True) as benchmark:
+            result = main.handle_command("/benchmark")
+
+        self.assertEqual(result, "handled")
+        benchmark.assert_called_once_with([main.MODEL_ALIAS])
+
     def test_no_evidence_answer_is_a_successful_cli_result(self):
         chunks = [{
             "id": 1,
@@ -140,6 +159,7 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertIn("Bu yardım metnini gösterir", output)
         self.assertIn("add", output)
         self.assertIn("remove", output)
+        self.assertIn("benchmark", output)
 
 
 if __name__ == "__main__":

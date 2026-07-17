@@ -194,7 +194,13 @@ def check_index_freshness(docs_dir=None, db_path=None):
     )
 
 
-def check_foundry(foundry_home=None, executable_finder=shutil.which):
+def check_foundry(
+    foundry_home=None,
+    executable_finder=shutil.which,
+    model_alias=None,
+):
+    active_model_alias = model_alias or MODEL_ALIAS
+
     if executable_finder("foundry") is None:
         return [
             HealthCheck(
@@ -206,7 +212,7 @@ def check_foundry(foundry_home=None, executable_finder=shutil.which):
             HealthCheck(
                 name="LLM modeli",
                 status="warning",
-                message=f"{MODEL_ALIAS} cache durumu kontrol edilemedi.",
+                message=f"{active_model_alias} cache durumu kontrol edilemedi.",
                 solution="Önce Foundry Local kurulumunu tamamla.",
             ),
         ]
@@ -229,7 +235,7 @@ def check_foundry(foundry_home=None, executable_finder=shutil.which):
             HealthCheck(
                 name="LLM modeli",
                 status="warning",
-                message=f"{MODEL_ALIAS} cache durumu kontrol edilemedi.",
+                message=f"{active_model_alias} cache durumu kontrol edilemedi.",
                 solution="Foundry Local sorununu gider ve /doctor komutunu yeniden çalıştır.",
             ),
         ]
@@ -245,8 +251,10 @@ def check_foundry(foundry_home=None, executable_finder=shutil.which):
             HealthCheck(
                 name="LLM modeli",
                 status="warning",
-                message=f"{MODEL_ALIAS} cache durumu kontrol edilemedi.",
-                solution=f"Gerekirse foundry model download {MODEL_ALIAS} çalıştır.",
+                message=f"{active_model_alias} cache durumu kontrol edilemedi.",
+                solution=(
+                    f"Gerekirse foundry model download {active_model_alias} çalıştır."
+                ),
             ),
         ]
 
@@ -255,7 +263,7 @@ def check_foundry(foundry_home=None, executable_finder=shutil.which):
         status="ok",
         message="Terminal aracı ve model cache dizini hazır.",
     )
-    model_name = MODEL_ALIAS.lower()
+    model_name = active_model_alias.lower()
     model_cached = any(
         model_name in str(metadata_path.parent).lower()
         and any(
@@ -271,8 +279,8 @@ def check_foundry(foundry_home=None, executable_finder=shutil.which):
             HealthCheck(
                 name="LLM modeli",
                 status="error",
-                message=f"{MODEL_ALIAS} yerel cache içinde bulunamadı.",
-                solution=f"foundry model download {MODEL_ALIAS} çalıştır.",
+                message=f"{active_model_alias} yerel cache içinde bulunamadı.",
+                solution=f"foundry model download {active_model_alias} çalıştır.",
             ),
         ]
 
@@ -281,7 +289,7 @@ def check_foundry(foundry_home=None, executable_finder=shutil.which):
         HealthCheck(
             name="LLM modeli",
             status="ok",
-            message=f"{MODEL_ALIAS} cache içinde hazır.",
+            message=f"{active_model_alias} cache içinde hazır.",
         ),
     ]
 

@@ -59,6 +59,7 @@ local-rag-assistant/
 ├── pyproject.toml             # Paket metadata'sı ve local-rag entrypoint'i
 ├── app/
 │   ├── __init__.py            # Paket sürümü
+│   ├── benchmark.py
 │   ├── cli_output.py
 │   ├── config.py
 │   ├── database.py
@@ -74,9 +75,11 @@ local-rag-assistant/
 │   └── rag.db                 # Üretilen yerel veritabanı, Git'e eklenmez
 ├── docs/
 │   ├── example.txt
-│   └── datamining.pdf
+│   ├── datamining.pdf
+│   └── cybersecurity.txt
 ├── eval.py
 ├── eval_cases.json
+├── benchmark_cases.json
 ├── embedding_test.py
 ├── foundry_test.py
 ├── main.py
@@ -94,7 +97,7 @@ Uygulamanın ana giriş noktasıdır. Terminal arayüzünü ve bütün RAG karar
 Başlıca sorumlulukları:
 
 - Açılış banner'ını ve `rag>` prompt'unu gösterir.
-- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/doctor`, `/add`, `/remove`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
+- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/doctor`, `/add`, `/remove`, `/benchmark`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
 - Kullanıcı sorusu için retrieval çalıştırır.
 - En iyi similarity skorunu kontrol eder.
 - Context'e girecek chunkları filtreler.
@@ -305,7 +308,7 @@ Akış:
 2. Sorunun embedding'ini üretir.
 3. Chunk embeddinglerini NumPy `float32` matrisine dönüştürür.
 4. Bozuk, `NaN` veya sonsuz embeddingleri filtreler.
-5. `cosine_similarity` ile benzerlik skorlarını hesaplar.
+5. Soru ve chunk matrislerini scikit-learn ile L2 normalize eder; NumPy `einsum` ile normalized dot product hesaplar. Bu değer cosine similarity ile aynıdır ve mevcut NumPy/BLAS ortamındaki matmul uyarılarını önler.
 6. Sonuçları yüksek skordan düşük skora sıralar.
 7. En iyi `TOP_K` sonucu döndürür.
 
@@ -336,6 +339,8 @@ Mevcut varsayılan model:
 MODEL_ALIAS = "phi-4-mini"
 ```
 
+`LOCAL_RAG_MODEL` çevre değişkeni doluysa aktif alias bu değerden alınır; aksi halde `phi-4-mini` kullanılır. `LocalLLM(model_alias=...)` benchmark gibi kontrollü akışların modeli açıkça seçebilmesini sağlar.
+
 `LocalLLM` sınıfı:
 
 1. Foundry Local servis durumunu kontrol eder; normal modda gerekirse servisi sessiz başlatır.
@@ -344,11 +349,15 @@ MODEL_ALIAS = "phi-4-mini"
 4. Chat completion çağrısı yapar.
 5. Ham cevabı `clean_answer()` ile temizler.
 
-Foundry SDK normalde `foundry service start` alt sürecinin çıktısını doğrudan terminale bağlar. `create_foundry_manager()` normal modda aynı servisi `stdout` ve `stderr` kapalı başlatıp hazır olana kadar durumunu kontrol eder; böylece `Service is Started...` mesajı Rich spinner satırına karışmaz. `/debug on` açıkken SDK'nın varsayılan başlangıç yolu kullanılır ve ham çıktı tanılama amacıyla görünür kalır.
+Foundry SDK normalde `foundry service start` alt sürecinin çıktısını doğrudan terminale bağlar. `create_foundry_manager()` normal modda aynı servisi `stdout` ve `stderr` kapalı başlatıp hazır olana kadar durumunu kontrol eder; böylece servis mesajı Rich spinner satırına karışmaz. Debug modunda başlangıç çıktısı görünür kalır. Servis durumuna 15 saniye, Foundry HTTP/model çağrılarına 120 saniye sınır uygulanır.
 
 `clean_answer()` modelin ekleyebildiği `Cevap:`, `Kaynak:`, `[Parça 1-3]`, `(Parça 1)` ve `(Parça 3)` gibi istenmeyen etiketleri temizler. Etiket kaldırılırken noktalama önündeki gereksiz boşluklar da düzeltilir. Parça numaraları yalnızca modelin context'i ayırmasına yardım eder; kullanıcı kaynak bilgisini aşağıdaki kaynak tablosundan görür.
 
-`is_valid_answer()` cevabın boş, aşırı kısa veya yalnızca kaynak etiketi olup olmadığını kontrol eder. Geçersiz cevaplar `main.py` tarafından fallback'e yönlendirilir.
+`is_valid_answer()` cevabın boş, aşırı kısa, yalnızca kaynak etiketi veya aşırı tekrar döngüsü olup olmadığını kontrol eder. Geçersiz cevaplar `main.py` tarafından fallback'e yönlendirilir. Tekrar kontrolü, Phi 3.5 benchmark'ında görülen aynı kelimenin sürekli üretilmesi sorununu yakalamak için eklenmiştir.
+
+### `app/benchmark.py`
+
+Modelleri aynı retrieval sonucu ve promptlarla karşılaştırır. Retrieval her model için tekrar edilmediğinden ölçüm LLM farkına odaklanır. İlk vaka iki kez çalıştırılarak model yükleme, ilk generation ve sıcak generation süreleri ayrılır; diğer vakalar cevap kalitesini genişletir. Geçerli cevap sayısı ve `benchmark_cases.json` içindeki beklenen terimlerin kapsanma oranı hesaplanır. Ayrıntılı cevaplar ve ham süreler `data/model_benchmark.json` içine yazılır.
 
 ### `eval.py`
 
@@ -361,6 +370,7 @@ Kontroller:
 - Embeddingler geçerli ve sonlu sayılardan mı oluşuyor?
 - Boş/kısa/etiketli cevaplar başarısız kabul ediliyor mu?
 - Bilinen sorular doğru kaynak dosyayı buluyor mu?
+- En iyi chunk beklenen ana kavramları gerçekten içeriyor mu?
 - Doküman dışı soru similarity eşiğinin altında kalıyor mu?
 
 Çalıştırma:
@@ -377,9 +387,14 @@ PASS  answer_quality
 PASS  rag_definition
 PASS  embedding_definition
 PASS  data_mining_process
+PASS  security_goals
+PASS  phishing_definition
+PASS  multi_factor_authentication
+PASS  backup_rule
 PASS  out_of_scope_weather
+PASS  out_of_scope_cooking
 
-6/6 test başarılı
+11/11 test başarılı
 ```
 
 ### `eval_cases.json`
@@ -393,6 +408,7 @@ Her vaka şu bilgilerin bir kısmını içerir:
 - Beklenen davranış (`relevant` veya `not_found`)
 - Beklenen kaynak dosya
 - Minimum veya maksimum skor
+- En iyi chunk içinde bulunması gereken kavramlar
 
 Yeni bir doküman veya konu eklendiğinde bu dosyaya yeni sorular eklenmelidir.
 
@@ -529,6 +545,7 @@ local-rag ask "RAG nedir?"
 local-rag add "/Users/kullanici/Documents/notlar.pdf"
 local-rag remove "notlar.pdf"
 local-rag remove "notlar.pdf" --yes
+local-rag benchmark --models phi-4-mini phi-3.5-mini
 local-rag reindex
 local-rag stats
 local-rag sources
@@ -552,6 +569,7 @@ CLI komutları:
 /doctor     Doküman, indeks, embedding ve Foundry/model sağlığını kontrol eder
 /add <yol>  TXT veya PDF dosyasını doğrulayıp docs/ klasörüne kopyalar
 /remove <ad> Dokümanı onay alarak docs/ klasöründen siler
+/benchmark [model] Model sürelerini ve cevap kalitesini karşılaştırır
 /reindex    docs/ klasörünü yeniden işler
 /debug on   Retrieval, context ve hata detaylarını açar
 /debug off  Debug çıktısını kapatır
@@ -610,7 +628,13 @@ Modeli disk cache'inden sil:
 foundry cache remove qwen3-4b
 ```
 
-Uygulamanın kullandığı chat modelini değiştirmek için `app/llm.py` içindeki `MODEL_ALIAS` değeri değiştirilir. Chat modeli değiştiğinde `/reindex` gerekmez; embedding modeli ve veritabanı aynı kalır.
+Uygulamanın chat modelini kod değiştirmeden seçmek için komutun başına çevre değişkeni eklenir:
+
+```bash
+LOCAL_RAG_MODEL=phi-3.5-mini local-rag ask "RAG nedir?"
+```
+
+`local-rag model` seçimin `LOCAL_RAG_MODEL` veya varsayılandan geldiğini gösterir. Chat modeli değiştiğinde `/reindex` gerekmez; embedding modeli ve veritabanı aynı kalır.
 
 Model katalogda bulunup cache'te bulunmuyorsa mevcut kodun `load_model()` çağrısı hata verir ve fallback devreye girer. Önce `foundry model download <alias>` çalıştırılmalıdır.
 
@@ -664,10 +688,10 @@ Her prompt, LLM veya fallback değişikliğinden sonra eval'e ek olarak `python 
 Son eval ve unit test çalışmasında:
 
 ```text
-11 chunk
-2 kaynak dosya
-6/6 eval testi başarılı
-67/67 unit testi başarılı
+16 chunk
+3 kaynak dosya
+11/11 eval testi başarılı
+81/81 unit testi başarılı
 ```
 
 Başarılı kontroller:
@@ -690,6 +714,10 @@ Başarılı kontroller:
 - Ortak soru akışı ve exit code'lar: interaktif/tek-komut davranış birliği, başarı `0`, operasyonel hata `1`
 - İndeks güncelliği: SHA-256 manifesti, eklenen/değişen/silinen dosya ayrımı, cevap öncesi uyarı ve atomik rollback
 - Güvenli dosya yönetimi: TXT/PDF doğrulama, üzerine yazma ve path traversal koruması, silme onayı, `--yes` otomasyon seçeneği
+- Genişletilmiş eval: siber güvenlik dokümanı, dört yeni doğru-kaynak vakası, ikinci kapsam dışı vaka ve chunk kavram kontrolü
+- Model yapılandırması: `LOCAL_RAG_MODEL` override'ı, `/model` ve `/config` görünürlüğü
+- Model benchmark: Phi 4 için 3/3 geçerli ve %89 terim kapsamı; Phi 3.5 için 2/3 ve %56 kapsam
+- Tekrar filtresi: Phi 3.5'in bozuk tekrarlı cevabını geçersiz sayıp normal akışta fallback'e yönlendirme
 
 ## 12. Yakın roadmap
 
@@ -704,12 +732,13 @@ Başarılı kontroller:
 - Kurulabilir CLI: `local-rag` interaktif oturumunu ve tek seferlik alt komutları standart Python entrypoint'iyle sunar.
 - İndeks güncelliği: dokümanların SHA-256 manifestini saklar; soru akışı, `/stats` ve `/doctor` üzerinden reindex ihtiyacını bildirir.
 - Güvenli dosya yönetimi: interaktif `/add`/`/remove` ile `local-rag add`/`remove` komutlarını doğrulama ve onay kurallarıyla sunar.
+- Genişletilmiş eval: `cybersecurity.txt` ile kaynak, skor ve chunk kavramlarını doğrular.
+- Model benchmark ve yapılandırma: süre/kalite raporu üretir, `LOCAL_RAG_MODEL` ile kod değiştirmeden model seçer.
 
 ### V1'i tamamlama
 
-1. Model karşılaştırması yapmak (`phi-3.5-mini`, `phi-4-mini`, gerekirse Qwen/Mistral).
-2. Varsayılan modeli ölçümlere göre seçmek ve alias yapılandırmasını değerlendirmek.
-3. Ana README'yi kullanım ve portfolyo sunumu için düzenlemek.
+1. Ana README'yi kullanım, mimari, benchmark sonucu ve portfolyo sunumu için düzenlemek.
+2. V2 için FastAPI veya Streamlit yönünü seçmek.
 
 ### V2 fikirleri
 

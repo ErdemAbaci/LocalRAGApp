@@ -1,0 +1,23 @@
+[
+  {
+    "name": "security_goals",
+    "question": "Bilgi güvenliğinin üç temel hedefi nelerdir?",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.40,
+    "expected_terms": ["gizlilik", "bütünlük", "erişilebilirlik"]
+  },
+  {
+    "name": "phishing_protection",
+    "question": "Kimlik avı mesajlarında gönderen adresi ve bağlantılar nasıl kontrol edilmelidir?",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.40,
+    "expected_terms": ["gönderen", "bağlantı", "çok faktörlü"]
+  },
+  {
+    "name": "data_mining_summary",
+    "question": "Veri madenciliği süreçleri nedir?",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.40,
+    "expected_terms": ["veri", "ön işleme", "algoritma"]
+  }
+]

@@ -1,8 +1,18 @@
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import normalize
 
 from app.database import get_all_chunks
 from app.embeddings import embed_texts
+
+
+def calculate_cosine_similarities(question_embedding, chunk_embeddings):
+    normalized_question = normalize(question_embedding, norm="l2")
+    normalized_chunks = normalize(chunk_embeddings, norm="l2")
+    return np.einsum(
+        "ij,kj->ik",
+        normalized_question,
+        normalized_chunks,
+    )[0]
 
 
 def get_top_chunks(question, top_k=3):
@@ -35,7 +45,10 @@ def get_top_chunks(question, top_k=3):
         return []
 
     chunk_embeddings = np.vstack(chunk_embeddings)
-    similarities = cosine_similarity(question_embedding, chunk_embeddings)[0]
+    similarities = calculate_cosine_similarities(
+        question_embedding,
+        chunk_embeddings,
+    )
     similarities = np.nan_to_num(similarities, nan=-1.0, posinf=-1.0, neginf=-1.0)
 
     results = []
