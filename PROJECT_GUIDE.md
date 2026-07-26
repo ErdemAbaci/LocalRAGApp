@@ -26,7 +26,7 @@ docs/ içindeki TXT ve PDF dosyaları
         ↓
 Metin çıkarma
         ↓
-Chunk oluşturma (800 karakter, 100 karakter overlap)
+Token-aware chunk oluşturma (110 token, 20 token overlap)
         ↓
 Her chunk için embedding üretme
         ↓
@@ -60,6 +60,7 @@ local-rag-assistant/
 ├── app/
 │   ├── __init__.py            # Paket sürümü
 │   ├── benchmark.py
+│   ├── cli_input.py
 │   ├── cli_output.py
 │   ├── config.py
 │   ├── database.py
@@ -70,9 +71,13 @@ local-rag-assistant/
 │   ├── ingest.py
 │   ├── llm.py
 │   ├── prompts.py
+│   ├── project.py
+│   ├── rag_service.py
+│   ├── session.py
 │   └── retrieval.py
 ├── data/
-│   └── rag.db                 # Üretilen yerel veritabanı, Git'e eklenmez
+│   ├── rag.db                 # Üretilen yerel veritabanı, Git'e eklenmez
+│   └── exports/               # İsteğe bağlı oturum dışa aktarımları
 ├── docs/
 │   ├── example.txt
 │   ├── datamining.pdf
@@ -92,27 +97,115 @@ local-rag-assistant/
 
 ### `main.py`
 
-Uygulamanın ana giriş noktasıdır. Terminal arayüzünü ve bütün RAG karar akışını yönetir.
+Uygulamanın ana giriş noktasıdır. Terminal arayüzünü, proje yolu seçimini ve
+komut yönlendirmeyi yönetir; RAG kararları `app/rag_service.py` içindedir.
 
 Başlıca sorumlulukları:
 
-- Açılış banner'ını ve `rag>` prompt'unu gösterir.
-- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/doctor`, `/add`, `/remove`, `/benchmark`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
-- Kullanıcı sorusu için retrieval çalıştırır.
-- En iyi similarity skorunu kontrol eder.
-- Context'e girecek chunkları filtreler.
-- Extractive veya generative cevap arasında karar verir.
-- LLM cevabı başarısızsa en iyi chunk ile fallback yapar.
+- Açılış banner'ını ve sade `>` prompt'unu gösterir.
+- `/help`, `/stats`, `/model`, `/config`, `/sources`, `/show`, `/filter`, `/ask`, `/history`, `/repeat`, `/export`, `/doctor`, `/add`, `/remove`, `/benchmark`, `/reindex`, `/debug on`, `/debug off` ve `/exit` komutlarını işler.
+- `--project` veya `LOCAL_RAG_HOME` ile aktif docs/data kökünü seçer.
+- `RAGService` tarafından döndürülen yapılandırılmış sonucu Rich bileşenlerine verir.
 - Kaynakları, skorları ve süreleri ekrana yazdırır.
+- Başarılı sonuçları oturum geçmişine ekler; iptal edilen veya hata alan akışları kaydetmez.
 - İndeks dokümanlardan geri kaldıysa cevap öncesinde reindex uyarısı gösterir.
 
 LLM uygulama açılır açılmaz yüklenmez. `get_llm()` fonksiyonu sayesinde yalnızca ilk generative cevap gerektiğinde yüklenir ve aynı oturumda tekrar kullanılır. Buna lazy loading denir.
 
 `/model` aktif chat ve embedding modellerini, yerel cache durumlarını ve mevcut CLI oturumunda belleğe yüklenip yüklenmediklerini gösterir. `/config` retrieval, cevap kalitesi ve chunking ayarlarını açıklamalarıyla listeler. İki komut da salt okunurdur; model yüklemez, inference yapmaz, indeks veya ayar değiştirmez.
 
-`answer_question()` retrieval, cevap modu, fallback, kaynak ve performans gösterimini tek yerde tutar. Hem interaktif `rag>` döngüsü hem `local-rag ask` bu fonksiyonu çağırır; bu nedenle iki kullanım biçimi zamanla farklı RAG davranışları geliştirmez.
+`answer_question()` ortak servis sonucunu terminalde gösterir. Hem interaktif
+`>` döngüsü hem `local-rag ask` bu fonksiyonu çağırır; retrieval ve cevap modu
+kararlarının tek gerçek kaynağı ise `RAGService.answer()` fonksiyonudur.
 
 `cli()` argparse alt komutlarını işler. Argümansız çağrıda interaktif oturumu açar; `ask` tek sorudan sonra çıkar, diğer alt komutları ortak komut çalıştırıcısına yönlendirir. Başarı `0`, operasyonel hata `1`, geçersiz terminal kullanımı `2` exit code üretir.
+
+### `app/rag_service.py`
+
+Terminalden bağımsız RAG çekirdeğidir. Retrieval, threshold, context seçimi,
+extractive/generative karar, LLM fallback ve süre ölçümünü yürütür. Sonucu şu
+yapılandırılmış nesnelerle döndürür:
+
+- `RAGResult`: cevap, mod, en iyi skor, kaynak filtresi ve uyarı bilgisi
+- `RAGSource`: dosya, sayfa, chunk ID/metni, retrieval skoru ve eşleşme/komşu rolü
+- `RAGTimings`: retrieval, generation ve toplam süre
+
+Servis Rich veya argparse bilmez. CLI, ilerleme ve debug görünümü için genel
+callback'ler verir. Üretken akış `retrieval`, `model` ve `generation` aşamalarını
+ayrı bildirir; terminal bunları tek satırda gösterebilir. Bu ayrım çekirdeğin
+terminal metni ayrıştırmadan doğrudan test edilmesini sağlar.
+
+İnteraktif TTY akışında servis ayrıca bir streaming callback'i alır. LLM'den
+gelen temizlenmiş kısmi cevaplar bu callback üzerinden sunum katmanına taşınır.
+`KeyboardInterrupt` fallback hatası gibi yutulmaz; üst katmana çıkar. Böylece
+`Ctrl+C`, yarım cevabı kaynak fallback'i sanmadan gerçekten generation'ı iptal
+eder.
+
+Retrieval sonuçları önce relevance skoruyla seçilir. Sentez gereken cevaplarda
+seçilmiş chunkların bir önceki ve bir sonraki komşusu, toplam context üst sınırı
+aşılmadan eklenir. Seçimde hem sabit context eşiği hem de en iyi skora göre
+izin verilen fark kullanılır; context eşiğinin altındaki komşular eklenmez.
+Kaynak tablosu relevance sırasını korur ve komşuları ayrı rolle gösterir; LLM
+prompt'u ise aynı parçaları kaynak, sayfa ve chunk düzenine göre okur. Böylece
+model sonuç paragrafını girişten önce görmez ve uzak konular prompt'u kirletmez.
+
+Retrieval yeterli kanıt bulduğu halde model tam kapsam dışı cümlesini döndürürse
+bu üretim geçerli sayılmaz. Servis, prompt context'indeki cümleleri soru
+terimleriyle karşılaştırır ve en çok örtüşen kaynak cümlelerine fallback yapar.
+Böylece en yüksek cosine skorlu chunk doğrudan cevabı içermese bile yanlış veya
+eksik bir kaynak metni gösterme riski azalır.
+
+### `app/project.py`
+
+Aktif çalışma kökünü ve bunun altındaki `docs/`, `data/rag.db`, CLI geçmişi,
+oturum export klasörü ile benchmark raporu yollarını çözer. Öncelik sırası:
+
+1. Global `--project` seçeneği
+2. `LOCAL_RAG_HOME` ortam değişkeni
+3. Kurulu repository kökü
+
+Bu sayede `local-rag`, shell'in hangi klasörde olduğundan bağımsız çalışır.
+
+### `app/cli_input.py`
+
+Gerçek interaktif terminalde `prompt-toolkit` kullanarak çerçeveli, tek satırlı
+giriş alanını yönetir. `/` yazıldığı anda komutlar kısa açıklamalarıyla girişin
+üstünde açılır. Ok tuşları menü seçimini veya geçmişi, Tab ise seçilen komutu,
+kaynak adını, `/add` dosya yolunu ve `/debug` değerini tamamlar. Piped veya TTY
+olmayan kullanımda sade `input()`/readline yolu korunur.
+
+Yazılan slash komutunun adı ve argümanları ayrı stillerle renklendirilir.
+Parametre isteyen komutlarda `/show <chunk-id>` gibi bağlamsal kullanım ipucu
+çerçevenin içinde açılır. Çerçevenin altındaki durum satırı aktif model, kaynak
+sayısı, indeks güncelliği ve kaynak filtresini gösterir. Bu bilgiler her tuşta
+değil, yeni prompt açılırken bir kez alınır.
+
+Geçmiş yalnızca yerelde `data/cli_history` içinde düz metin olarak ve `0600`
+izniyle tutulur. Yeni giriş motoru mevcut geçmiş biçimini değiştirmez. Bu geçmiş
+yalnızca terminal ergonomisi içindir; model konuşma context'i değildir.
+
+Klavye davranışları bağlama göre düzenlenmiştir. `Esc` açık tamamlama menüsünü
+kapatır. `Ctrl+L` ekranı temizleyip aktif prompt'u yeniden çizer. Girişte metin
+varken `Ctrl+C` yalnızca satırı temizler; satır boşsa oturumu kapatır. Model
+generation'ı sırasında aynı `Ctrl+C` üst katmanda yakalanır, streaming bağlantısı
+kapatılır ve kısmi cevap oturum geçmişine yazılmaz.
+
+### `app/session.py`
+
+Mevcut interaktif oturumda başarıyla tamamlanan yapılandırılmış RAG sonuçlarını
+bellekte tutar. Her kayda sıra numarası, zaman, soru, cevap, cevap modu, skor,
+kaynak filtresi, kaynak metadata'sı ve süreler eklenir.
+
+- `/history`: Kayıtları kısa bir tablo halinde listeler.
+- `/repeat [id]`: Son veya seçilen soruyu ilk çalıştığı kaynak filtresiyle tekrarlar.
+- `/export markdown [yol]`: Okunabilir bir Markdown oturum raporu üretir.
+- `/export json [yol]`: Aynı veriyi araçların işleyebileceği JSON biçiminde üretir.
+
+Varsayılan hedef `data/exports/` klasörüdür. Kullanıcı açık bir yol verirse
+boşluklu yollar tırnakla kullanılabilir. Export mevcut dosyanın üzerine yazmaz.
+Kaynakların ID, dosya, sayfa, parça ve skor metadata'sı saklanır; doküman
+içeriğini gereksiz çoğaltmamak için tam `chunk_text` export edilmez. Bu özellik
+konuşma hafızası değildir ve önceki cevapları modele context olarak göndermez.
 
 ### `app/document_manager.py`
 
@@ -138,7 +231,10 @@ Mevcut ayarlar:
 ```python
 SIMILARITY_THRESHOLD = 0.20
 CONTEXT_SCORE_THRESHOLD = 0.35
+CONTEXT_RELATIVE_SCORE_MARGIN = 0.20
 TOP_K = 3
+NEIGHBOR_CHUNK_RADIUS = 1
+MAX_CONTEXT_CHUNKS = 5
 
 USE_EXTRACTIVE_FALLBACK = True
 EXTRACTIVE_SCORE_THRESHOLD = 0.50
@@ -151,7 +247,10 @@ Anlamları:
 
 - `SIMILARITY_THRESHOLD`: En iyi skor bunun altındaysa soru dokümanla alakasız kabul edilir.
 - `CONTEXT_SCORE_THRESHOLD`: LLM'e yalnızca bu skoru geçen chunklar gönderilir.
+- `CONTEXT_RELATIVE_SCORE_MARGIN`: En iyi sonuçtan bundan daha uzak eşleşmeleri context dışında bırakır.
 - `TOP_K`: Retrieval aşamasında en iyi kaç chunk'ın alınacağını belirler.
+- `NEIGHBOR_CHUNK_RADIUS`: Eşleşmenin çevresinden kaç önceki/sonraki chunk adayının alınacağını belirler.
+- `MAX_CONTEXT_CHUNKS`: Modele giden toplam eşleşme ve komşu sayısını sınırlar.
 - `USE_EXTRACTIVE_FALLBACK`: Tek güçlü chunk'ın LLM kullanılmadan cevap olmasına izin verir.
 - `EXTRACTIVE_SCORE_THRESHOLD`: Extractive cevap için gereken minimum skor.
 - `MAX_EXTRACTIVE_CHARS`: Çok uzun chunkların doğrudan cevap olarak dönmesini engeller.
@@ -163,23 +262,25 @@ Bu değerler rastgele seçilmemiştir; mevcut küçük eval seti ve manuel testl
 
 Rich tabanlı terminal sunumunu tek merkezden yönetir:
 
-- Sade açılış paneli
+- Özgün mini terminal robotu içeren açılış paneli
+- Göz yormayan ortak bordo tema
 - `/help`, `/stats`, `/sources` ve `/doctor` tabloları
 - Cevap başlığında Türkçe cevap modu ve en iyi retrieval skoru
 - Kaynak tablosu ve kompakt performans satırı
-- Reindex, retrieval ve generation spinner'ları
+- Reindex gibi bağımsız işler için spinner
+- Arama, model hazırlama ve yanıt üretimini aynı satırda ilerleten RAG göstergesi
 - Standart hata, uyarı, başarı ve bilgi mesajları
 
 Cevap renkleri dekorasyon için değil, durum bilgisini hızlı okutmak için kullanılır:
 
 | İç mod | Kullanıcı etiketi | Renk | Anlam |
 | --- | --- | --- | --- |
-| `generative` | Üretken | Cyan | Yerel LLM birden fazla kaynağı sentezledi. |
-| `extractive` | Doğrudan | Yeşil | Güçlü ve kısa kaynak metni doğrudan kullanıldı. |
-| `fallback_extractive` | Kaynak metni | Sarı | LLM yerine güvenli kaynak metnine dönüldü. |
+| `generative` | Üretken | Yumuşak bordo | Yerel LLM birden fazla kaynağı sentezledi. |
+| `extractive` | Doğrudan | Yumuşak yeşil | Güçlü ve kısa kaynak metni doğrudan kullanıldı. |
+| `fallback_extractive` | Kaynak metni | Yumuşak amber | LLM yerine güvenli kaynak metnine dönüldü. |
 | `no_evidence` | Kanıt bulunamadı | Gri | Soru için yeterli doküman kanıtı bulunamadı. |
 
-Teknik mod adları normal kullanıcı görünümünde gösterilmez. Panel başlığı `Cevap · Üretken · Skor 0.6342`, süre satırı ise `Arama · Yanıt · Toplam` biçimindedir. Cevap paneli, kaynak tablosu ve süreler aynı sol hizayı kullanır.
+Teknik mod adları normal kullanıcı görünümünde gösterilmez. Panel başlığı `Cevap · Üretken · Skor 0.6174`, süre satırı ise `Arama · Yanıt · Toplam` biçimindedir. Cevap paneli, kaynak tablosu ve süreler aynı sol hizayı kullanır.
 
 Normal modda kullanıcı yalnızca anlaşılır mesajı ve çözüm önerisini görür:
 
@@ -213,7 +314,8 @@ SQLite veritabanı işlemlerinden sorumludur. Veritabanı yolu `data/rag.db` şe
 - `init_db()`: Tabloyu oluşturur ve eksik metadata kolonlarını ekler.
 - `insert_chunk()`: Bir chunk ve metadata'sını kaydeder.
 - `replace_chunks()`: Eski chunk ve manifesti yenileriyle tek transaction içinde değiştirir. Herhangi bir ekleme başarısız olursa rollback ile eski indeks ve manifest birlikte korunur.
-- `get_all_chunks()`: Retrieval için bütün chunkları okur.
+- `get_all_chunks(source_name=None)`: Retrieval için bütün chunkları veya yalnızca parametreli kaynak filtresine uyan kayıtları okur.
+- `get_chunk_by_id()`: `/show` için embeddingi yüklemeden tek chunk'ın metadata ve tam metnini okur.
 - `get_source_manifest()`: İndeksi üreten doküman özetlerini okur; eski şemalarda güvenli biçimde boş liste döndürür.
 - `get_chunk_stats()`: `/stats` komutuna chunk ve kaynak sayısını verir.
 - `get_indexed_sources()`: `/sources` komutuna dosya bazında tür, sayfa ve chunk özetini verir. Veritabanı dosyası varsa sorgu öncesi şemayı güvenli şekilde hazırlar.
@@ -265,11 +367,16 @@ Akış:
 Chunk ayarları:
 
 ```python
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 110
+CHUNK_OVERLAP = 20
 ```
 
-Overlap, iki ardışık chunk arasında bir miktar ortak metin bırakır. Chunk sınırlarında önce cümle sonu tercih edilir. Overlap başlangıcı cümle sınırına hizalanamıyorsa kelime sınırı kullanılır; önceki chunk tam cümlede bittiyse yeni chunk bir sonraki tam cümleden başlatılır.
+Bu değerler karakter değil embedding tokenizer'ının token sayısıdır ve özel
+tokenları da kapsar. Kullanılan embedding modelinin maksimum girişi 128
+tokendır; 110 tokenlık sınır modelin göremeyeceği metin kuyruğu bırakmaz.
+Overlap, iki ardışık chunk arasında en fazla 20 tokenlık ortak alan hedefler.
+Chunk sınırlarında önce cümle sonu, mümkün değilse tam kelime/token sınırı
+seçilir; önceki chunk tam cümlede bittiyse yeni chunk sonraki cümleden başlar.
 
 `read_pdf_file()` her PDF sayfasını ayrı bir document kaydı olarak üretir. Bu sayede cevap kaynaklarında `page=2` gibi sayfa bilgisi gösterilebilir.
 
@@ -293,6 +400,7 @@ Bu model Türkçe dahil çok dilli metinleri 384 boyutlu sayısal vektörlere d�
 
 - `get_local_model_path()`: Hugging Face cache'indeki yerel snapshot yolunu bulur.
 - `get_embedding_model()`: Önce yerel snapshot'ı yükler; cache yoksa model kimliğiyle normal indirme yoluna döner ve instance'ı bellekte tutar.
+- `get_embedding_tokenizer()`: Ingestion'ın embedding modeliyle aynı token sınırını kullanmasını sağlar.
 - `embed_text()`: Tek bir metni embedding'e çevirir.
 - `embed_texts()`: Birden fazla metni batch halinde embedding'e çevirir.
 
@@ -304,15 +412,18 @@ Kullanıcı sorusuna en yakın chunkları bulur.
 
 Akış:
 
-1. SQLite'tan bütün chunkları alır.
+1. SQLite'tan bütün chunkları veya seçilmiş kaynağın chunklarını alır.
 2. Sorunun embedding'ini üretir.
 3. Chunk embeddinglerini NumPy `float32` matrisine dönüştürür.
 4. Bozuk, `NaN` veya sonsuz embeddingleri filtreler.
 5. Soru ve chunk matrislerini scikit-learn ile L2 normalize eder; NumPy `einsum` ile normalized dot product hesaplar. Bu değer cosine similarity ile aynıdır ve mevcut NumPy/BLAS ortamındaki matmul uyarılarını önler.
 6. Sonuçları yüksek skordan düşük skora sıralar.
-7. En iyi `TOP_K` sonucu döndürür.
+7. En iyi `TOP_K` sonucu seçer.
+8. Seçilen her sonuç için aynı kaynaktaki önceki/sonraki chunkı gerçek cosine
+   skoruyla neighbor adayı olarak ekler.
 
 Retrieval yalnızca ilgili metni bulur; cevap üretmez.
+Kaynak filtresi SQL'e parametre olarak verilir; dosya adı sorgu metnine eklenmez.
 
 ### `app/prompts.py`
 
@@ -348,6 +459,13 @@ MODEL_ALIAS = "phi-4-mini"
 3. Foundry Local'ın OpenAI-compatible endpoint'ine bağlanan client'ı oluşturur.
 4. Chat completion çağrısı yapar.
 5. Ham cevabı `clean_answer()` ile temizler.
+
+TTY kullanımında `generate_answer_stream()` OpenAI-compatible streaming
+cevabını parça parça okur. Her yeni parça birikmiş metne eklenir ve
+`clean_streaming_preview()` ile kullanıcıya gösterilmeden önce `Cevap:` ile
+`[Parça 1]` benzeri etiketlerden arındırılır. Akış başarıyla bittiğinde aynı
+nihai `clean_answer()` ve kalite kontrolleri uygulanır. Normal bitişte de
+`Ctrl+C` iptalinde de response kapatılır; yarım bağlantı açık bırakılmaz.
 
 Foundry SDK normalde `foundry service start` alt sürecinin çıktısını doğrudan terminale bağlar. `create_foundry_manager()` normal modda aynı servisi `stdout` ve `stderr` kapalı başlatıp hazır olana kadar durumunu kontrol eder; böylece servis mesajı Rich spinner satırına karışmaz. Debug modunda başlangıç çıktısı görünür kalır. Servis durumuna 15 saniye, Foundry HTTP/model çağrılarına 120 saniye sınır uygulanır.
 
@@ -486,7 +604,7 @@ Avantajları:
 ### `generative`
 
 Birden fazla chunk'ın sentezlenmesi gerektiğinde Foundry Local modeli context'e göre cevap üretir.
-CLI bu modu kullanıcıya `Üretken` etiketi ve cyan çerçeveyle gösterir.
+CLI bu modu kullanıcıya `Üretken` etiketi ve yumuşak bordo çerçeveyle gösterir.
 
 İlk generative cevapta model yükleme süresi de `generation` süresine dahildir. Aynı oturumdaki sonraki cevaplar daha hızlı olabilir.
 
@@ -500,7 +618,7 @@ Generative cevap şu durumlarda başarısız kabul edilir:
 - Yalnızca kaynak/parça etiketi içeren cevap
 
 Bu durumda uygulama çökmez; en güçlü retrieval chunk'ını cevap olarak gösterir.
-CLI güvenli geri dönüşü `Kaynak metni` etiketi ve sarı çerçeveyle görünür kılar.
+CLI güvenli geri dönüşü `Kaynak metni` etiketi ve yumuşak amber çerçeveyle görünür kılar.
 
 Fallback ham chunk döndürür. Chunker cümle sınırını tercih eder; yalnızca çok uzun ve noktalamasız metinlerde cevap cümlenin ortasından başlayabilir.
 
@@ -542,6 +660,7 @@ Tek seferlik terminal kullanımları:
 
 ```bash
 local-rag ask "RAG nedir?"
+local-rag ask --source example.txt "RAG nedir?"
 local-rag add "/Users/kullanici/Documents/notlar.pdf"
 local-rag remove "notlar.pdf"
 local-rag remove "notlar.pdf" --yes
@@ -549,6 +668,7 @@ local-rag benchmark --models phi-4-mini phi-3.5-mini
 local-rag reindex
 local-rag stats
 local-rag sources
+local-rag show 156
 local-rag doctor
 local-rag model
 local-rag config
@@ -556,7 +676,14 @@ local-rag --help
 local-rag --version
 ```
 
-`local-rag --debug ask "RAG nedir?"` tek soruluk akışta teknik ayrıntıları açar. `docs/` ve `data/` yolları çalışma dizinine göre çözüldüğü için komut şimdilik repository kökünde çalıştırılmalıdır.
+`local-rag --debug ask "RAG nedir?"` tek soruluk akışta teknik ayrıntıları açar.
+Editable kurulumdan sonra komut repository dışında da çalışır. Başka bir docs/data
+kökü seçmek için global seçenek alt komuttan önce yazılır:
+
+```bash
+local-rag --project /dosya/yolu/rag-calismasi stats
+LOCAL_RAG_HOME=/dosya/yolu/rag-calismasi local-rag
+```
 
 CLI komutları:
 
@@ -566,6 +693,9 @@ CLI komutları:
 /model      Model, cache ve oturumdaki lazy-load durumunu gösterir
 /config     Aktif RAG ayarlarını açıklamalarıyla salt okunur gösterir
 /sources    İndeksteki dosya, tür, sayfa ve chunk sayılarını gösterir
+/show <id>  Chunk metadata'sını ve tam kaynak metnini gösterir
+/filter <dosya|off> Oturumdaki retrieval kaynağını sınırlar veya filtreyi kapatır
+/ask [--source dosya] <soru> Tek soruluk kaynak filtresi uygular
 /doctor     Doküman, indeks, embedding ve Foundry/model sağlığını kontrol eder
 /add <yol>  TXT veya PDF dosyasını doğrulayıp docs/ klasörüne kopyalar
 /remove <ad> Dokümanı onay alarak docs/ klasöründen siler
@@ -654,6 +784,8 @@ Her prompt, LLM veya fallback değişikliğinden sonra eval'e ek olarak `python 
 2. Birden fazla chunk gerektiren generative soru
 3. Dokümanla alakasız bir soru
 4. Mümkünse aynı oturumda iki generative soru ile sıcak model süresi
+5. Üretken cevap akarken `Ctrl+C` ile iptal ve ardından yeni soru sorabilme
+6. `/history`, `/repeat` ve iki export biçiminin beklenen kaydı üretmesi
 
 `eval.py` retrieval davranışını deterministik biçimde test eder; LLM'in Türkçe akıcılığını tam olarak ölçmez. Model cevapları manuel olarak da değerlendirilmelidir.
 
@@ -668,6 +800,10 @@ Her prompt, LLM veya fallback değişikliğinden sonra eval'e ek olarak `python 
 - Embeddingler SQLite içinde JSON olarak saklanır; özel bir vector database kullanılmaz.
 - Çok uzun ve noktalamasız metinlerde chunker kelime sınırına döner; bu durumda fallback tam bir cümlenin ortasından başlayabilir.
 - Türkçe gramer kalitesi otomatik olarak güvenilir biçimde ölçülmez.
+- `/history` kayıtları yalnızca açık interaktif süreçte bellekte yaşar; kalıcılık
+  gerekiyorsa oturum kapanmadan `/export` kullanılmalıdır.
+- Oturum geçmişi önceki cevapları modele vermez; conversation memory ve takip
+  sorusu çözümleme henüz yoktur.
 
 ## 10. Şu ana kadar verilen önemli mimari kararlar
 
@@ -688,10 +824,10 @@ Her prompt, LLM veya fallback değişikliğinden sonra eval'e ek olarak `python 
 Son eval ve unit test çalışmasında:
 
 ```text
-16 chunk
+24 chunk
 3 kaynak dosya
 11/11 eval testi başarılı
-81/81 unit testi başarılı
+153/153 unit testi başarılı
 ```
 
 Başarılı kontroller:
@@ -705,8 +841,9 @@ Başarılı kontroller:
 - `/sources` komutu: dosya/tür/sayfa/chunk özeti, boş indeks ve eski/eksik şema güvenliği
 - `/doctor` komutu: 6 sağlık kontrolü başarılı, indeks güncelliği ile Foundry/Phi-4 cache doğrulaması
 - Standart hata çıktıları: çözüm önerileri, debug ayrıntıları ve hata sonrası oturumun devam etmesi
-- Rich terminal görünümü: semantik cevap renkleri, Türkçe mod/süre etiketleri, ortak sol hiza, dar terminal ve TTY spinner kontrolü
+- Rich terminal görünümü: yumuşak bordo tema, özgün açılış maskotu, semantik cevap renkleri, Türkçe mod/süre etiketleri ve tek satırlı RAG aşama göstergesi
 - LLM cevap temizliği: köşeli/parantezli tekli, aralıklı ve listeli parça atıflarının kaldırılması
+- Çıplak parça etiketi temizliği: cevap sonundaki `Parça 1.` ve `Parça 1-3` biçimlerinin normal “parça” kelimelerine dokunmadan kaldırılması
 - Yerel embedding snapshot yüklemesi: cache varken ağ isteği olmadan 384 boyut doğrulaması
 - Foundry başlangıcı: normal modda alt süreç çıktısının bastırılması, debug modunda korunması ve timeout hata yolu
 - `/model` ve `/config`: model yüklemeden cache/lazy-load durumu ile aktif ayarların gösterilmesi
@@ -718,6 +855,16 @@ Başarılı kontroller:
 - Model yapılandırması: `LOCAL_RAG_MODEL` override'ı, `/model` ve `/config` görünürlüğü
 - Model benchmark: Phi 4 için 3/3 geçerli ve %89 terim kapsamı; Phi 3.5 için 2/3 ve %56 kapsam
 - Tekrar filtresi: Phi 3.5'in bozuk tekrarlı cevabını geçersiz sayıp normal akışta fallback'e yönlendirme
+- Yapılandırılmış servis: CLI'dan bağımsız `RAGResult`, kaynak ve süre sözleşmesi
+- Kaynak denetimi: ID ile chunk görüntüleme ve parametreli dosya filtresi
+- Proje yolu: repository dışından çalışma, `--project` ve `LOCAL_RAG_HOME` önceliği
+- Terminal girişi: çerçeveli prompt, giriş üstünde canlı slash menüsü, komut renklendirme, parametre ipucu, model/kaynak/indeks/filtre durumu, kalıcı geçmiş ve Tab tamamlama
+- Terminal uyumluluğu: ok tuşu geçmişi, `0600` geçmiş izni, `Esc`/`Ctrl+L`/bağlamsal `Ctrl+C` davranışı ve TTY olmayan kullanımlarda sade giriş fallback'i
+- Streaming generation: tokenlarla güncellenen geçici cevap paneli, bitişte nihai kalite kontrolü ve `Ctrl+C` ile güvenli bağlantı kapatma
+- Oturum araçları: `/history`, kaynak filtresini koruyan `/repeat` ve tam chunk metnini taşımayan Markdown/JSON `/export`
+- Token-aware chunking: 128 tokenlık model sınırına karşı maksimum 109 token ölçümü, cümle/kelime hizası ve kesilmeyen embedding girdisi
+- Context kalitesi: skorla seçim, belge düzeninde prompt, en fazla 5 parçalık komşu genişletme ve kaynaklarda eşleşme/komşu rolü
+- Context eval: doğrudan bilgi için en iyi chunk, dağıtılmış bilgi için gerçekten modele giden sınırlı context kavramlarının doğrulanması
 
 ## 12. Yakın roadmap
 
@@ -726,7 +873,7 @@ Başarılı kontroller:
 - `/sources`: İndeksteki dosya, tür, sayfa ve chunk sayılarını listeler.
 - `/doctor`: Doküman, veritabanı, embedding ve Foundry/model cache sağlığını kontrol eder.
 - Standart hata mesajları: kullanıcı mesajını teknik ayrıntıdan ayırır ve çözüm gösterir.
-- Rich terminal görünümü: sade banner, semantik cevap paneli, hizalı tablolar, Türkçe süreler ve uzun işlemler için spinner gösterir.
+- Rich terminal görünümü: sade banner, semantik cevap paneli, hizalı tablolar, Türkçe süreler ve tek satırlı aşamalı RAG ilerlemesi gösterir.
 - Sessiz Foundry başlangıcı: normal kullanıcı görünümünde servis logunu gizler, debug modunda ham çıktıyı korur.
 - `/model` ve `/config`: model/cache/lazy-load durumunu ve aktif ayarları salt okunur gösterir.
 - Kurulabilir CLI: `local-rag` interaktif oturumunu ve tek seferlik alt komutları standart Python entrypoint'iyle sunar.
@@ -735,20 +882,28 @@ Başarılı kontroller:
 - Genişletilmiş eval: `cybersecurity.txt` ile kaynak, skor ve chunk kavramlarını doğrular.
 - Model benchmark ve yapılandırma: süre/kalite raporu üretir, `LOCAL_RAG_MODEL` ile kod değiştirmeden model seçer.
 - Ana README: kurulum, kullanım, mimari, gerçek benchmark sonuçları, testler, sınırlamalar ve V2 yol haritasını tek giriş noktasında sunar.
+- Yapılandırılmış RAG servisi: cevap kararlarını Rich terminal sunumundan ayırır.
+- Kaynak denetimi: `/show`, `/filter` ve `ask --source` ile chunk ve dosya bazlı aramayı görünür kılar.
+- Taşınabilir CLI: `--project` ve `LOCAL_RAG_HOME` ile çalışma dizininden bağımsız yollar kullanır.
+- Terminal ergonomisi: çerçeveli giriş, açıklamalı canlı slash menüsü, durum satırı, komut renklendirme, parametre ipuçları, ok tuşu geçmişi ve bağlama duyarlı Tab tamamlama sağlar.
+- Klavye ve streaming ergonomisi: `Esc`, `Ctrl+L`, bağlamsal `Ctrl+C`, token geldikçe güncellenen cevap ve güvenli generation iptali sağlar.
+- Oturum geçmişi: `/history`, `/repeat` ve üzerine yazma korumalı Markdown/JSON export sunar.
+- Token-aware chunking: embedding tokenizer'ının 128 token sınırına uygun, cümle odaklı 110/20 parçalama sağlar.
+- Context hazırlama: relevance seçimini belge okuma sırasından ayırır ve üretken cevaplarda skorlu komşu parçaları en fazla 5 context parçasına kadar ekler.
 
-### V2'ye geçiş
+### Sonraki CLI adımları
 
-V1 hedefleri tamamlandı. Sıradaki adım FastAPI veya Streamlit yönünü seçmek ve
-mevcut CLI akışını bozmadan ilk küçük V2 arayüzünü oluşturmaktır.
+Web/API şu an proje hedefinde değildir. Sıradaki geliştirmeler saf CLI deneyimi
+ve retrieval kalitesi üzerinde ilerleyecektir.
 
-### V2 fikirleri
+### Bekleyen fikirler
 
-- Streamlit web arayüzü
-- FastAPI endpoint'leri (`/ask`, `/reindex`, `/stats`)
+- Değişen dosya odaklı incremental reindex ve dosya bazlı ilerleme
+- SQLite FTS5/BM25 ile dense retrieval'ı birleştiren hybrid search
+- Daha geniş aday havuzu için reranking
 - OCR desteği
 - Conversation history
 - Daha büyük veri setleri için vector database
-- Neighbor chunk genişletme veya reranking
 - Otomatik model karşılaştırma raporu
 
 ## 13. Projeye geri dönerken kısa kontrol listesi

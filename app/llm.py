@@ -9,7 +9,7 @@ import foundry_local.api as foundry_api
 import openai
 from foundry_local import FoundryLocalManager
 
-from app.config import MIN_GENERATIVE_ANSWER_CHARS
+from app.config import MIN_GENERATIVE_ANSWER_CHARS, NO_EVIDENCE_ANSWER
 
 
 DEFAULT_MODEL_ALIAS = "phi-4-mini"
@@ -57,6 +57,9 @@ CITATION_BODY_PATTERN = (
     r"(?:(?:\s*[-–,]\s*|\s+ve\s+)(?:(?:Parça|Parca)\s+)?\d+)*"
 )
 CITATION_PATTERN = rf"(?:\[{CITATION_BODY_PATTERN}\]|\({CITATION_BODY_PATTERN}\))"
+TRAILING_CITATION_PATTERN = (
+    rf"(?:^|\s+){CITATION_BODY_PATTERN}\s*[.!?]?\s*$"
+)
 
 
 def remove_answer_prefix(text):
@@ -77,6 +80,12 @@ def remove_answer_prefix(text):
 
 def remove_citations(text):
     cleaned = re.sub(CITATION_PATTERN, "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        TRAILING_CITATION_PATTERN,
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -110,6 +119,34 @@ def clean_answer(answer):
     return cleaned or original_answer
 
 
+def clean_streaming_preview(answer):
+    cleaned = answer.strip()
+    if not cleaned:
+        return ""
+
+    if any(
+        prefix.casefold().startswith(cleaned.casefold())
+        for prefix in ANSWER_PREFIXES
+    ):
+        return ""
+
+    filtered_lines = []
+    for line in cleaned.splitlines():
+        stripped = remove_answer_prefix(line)
+        if stripped.lower().startswith(("kaynak:", "source:")):
+            break
+        if stripped:
+            filtered_lines.append(stripped)
+
+    preview = remove_citations("\n".join(filtered_lines))
+    for marker in ANSWER_STOP_MARKERS:
+        marker_index = preview.find(marker)
+        if marker_index >= 0:
+            preview = preview[:marker_index].strip()
+
+    return preview
+
+
 def has_excessive_repetition(answer):
     words = re.findall(r"\b\w+\b", answer.casefold(), flags=re.UNICODE)
 
@@ -127,25 +164,35 @@ def has_excessive_repetition(answer):
     return bool(trigram_counts and trigram_counts.most_common(1)[0][1] >= 3)
 
 
-def is_valid_answer(answer):
+def get_answer_validation_error(answer):
     if not answer:
-        return False
+        return "empty"
 
     cleaned = answer.strip()
 
+    if cleaned.casefold() == NO_EVIDENCE_ANSWER.casefold():
+        return "false_no_evidence"
+
     if len(cleaned) < MIN_GENERATIVE_ANSWER_CHARS:
-        return False
+        return "too_short"
 
     if cleaned.lower().startswith(("kaynak:", "source:")):
-        return False
+        return "source_label"
 
     without_citations = remove_citations(cleaned)
     without_prefix = remove_answer_prefix(without_citations)
 
     if has_excessive_repetition(without_prefix):
-        return False
+        return "repetition"
 
-    return len(without_prefix) >= MIN_GENERATIVE_ANSWER_CHARS
+    if len(without_prefix) < MIN_GENERATIVE_ANSWER_CHARS:
+        return "too_short"
+
+    return None
+
+
+def is_valid_answer(answer):
+    return get_answer_validation_error(answer) is None
 
 
 def get_foundry_service_uri():
@@ -236,3 +283,35 @@ class LocalLLM:
         raw_answer = response.choices[0].message.content
 
         return clean_answer(raw_answer)
+
+    def generate_answer_stream(self, messages, on_update=None):
+        response = self.client.chat.completions.create(
+            model=self.model_info.id,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=220,
+            stream=True,
+        )
+        raw_parts = []
+        last_preview = ""
+
+        try:
+            for chunk in response:
+                if not chunk.choices:
+                    continue
+
+                content = chunk.choices[0].delta.content or ""
+                if not content:
+                    continue
+
+                raw_parts.append(content)
+                preview = clean_streaming_preview("".join(raw_parts))
+                if on_update is not None and preview and preview != last_preview:
+                    on_update(preview)
+                    last_preview = preview
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+
+        return clean_answer("".join(raw_parts))

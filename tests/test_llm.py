@@ -1,15 +1,18 @@
 import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.llm import (
     DEFAULT_MODEL_ALIAS,
     LocalLLM,
     clean_answer,
+    clean_streaming_preview,
     create_foundry_manager,
     get_model_alias,
     get_model_alias_source,
     get_foundry_service_uri,
+    get_answer_validation_error,
     has_excessive_repetition,
     is_valid_answer,
 )
@@ -82,6 +85,30 @@ class AnswerCleaningTests(unittest.TestCase):
         self.assertTrue(is_valid_answer(cleaned))
         self.assertNotIn("Parça 2", cleaned)
 
+    def test_bare_trailing_piece_citation_is_removed(self):
+        answer = (
+            "Çok faktörlü kimlik doğrulama iki bağımsız kanıt kullanır. "
+            "Parça 1."
+        )
+
+        self.assertEqual(
+            clean_answer(answer),
+            "Çok faktörlü kimlik doğrulama iki bağımsız kanıt kullanır.",
+        )
+
+    def test_bare_trailing_piece_range_on_separate_line_is_removed(self):
+        answer = "Veri temizleme hatalı verileri düzeltir.\nParça 1-3"
+
+        self.assertEqual(
+            clean_answer(answer),
+            "Veri temizleme hatalı verileri düzeltir.",
+        )
+
+    def test_normal_piece_word_inside_answer_is_preserved(self):
+        answer = "Metin iki parçaya ayrılır ve her parça ayrı değerlendirilir."
+
+        self.assertEqual(clean_answer(answer), answer)
+
     def test_repeated_word_loop_is_rejected(self):
         answer = "Gönderinin " * 18
 
@@ -96,6 +123,76 @@ class AnswerCleaningTests(unittest.TestCase):
 
         self.assertFalse(has_excessive_repetition(answer))
         self.assertTrue(is_valid_answer(answer))
+
+    def test_no_evidence_phrase_is_not_a_valid_generated_answer(self):
+        self.assertFalse(is_valid_answer("Bu bilgi verilen dokümanlarda yok."))
+        self.assertEqual(
+            get_answer_validation_error("Bu bilgi verilen dokümanlarda yok."),
+            "false_no_evidence",
+        )
+
+    def test_streaming_preview_hides_prefix_and_piece_citations(self):
+        self.assertEqual(clean_streaming_preview("Cevap"), "")
+        self.assertEqual(
+            clean_streaming_preview(
+                "Cevap: Veri temizleme hataları düzeltir (Parça 2)."
+            ),
+            "Veri temizleme hataları düzeltir.",
+        )
+
+
+class StreamingGenerationTests(unittest.TestCase):
+    @staticmethod
+    def make_chunk(content):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=content),
+            )]
+        )
+
+    def make_llm(self, stream):
+        llm = LocalLLM.__new__(LocalLLM)
+        llm.model_info = SimpleNamespace(id="model-id")
+        llm.client = MagicMock()
+        llm.client.chat.completions.create.return_value = stream
+        return llm
+
+    def test_streaming_generation_updates_preview_and_closes_response(self):
+        stream = MagicMock()
+        stream.__iter__.return_value = iter([
+            self.make_chunk("Cevap: Veri temizleme "),
+            self.make_chunk("hataları düzeltir (Parça 2)."),
+        ])
+        llm = self.make_llm(stream)
+        updates = []
+
+        answer = llm.generate_answer_stream([], on_update=updates.append)
+
+        self.assertEqual(answer, "Veri temizleme hataları düzeltir.")
+        self.assertEqual(updates[-1], answer)
+        stream.close.assert_called_once_with()
+        llm.client.chat.completions.create.assert_called_once_with(
+            model="model-id",
+            messages=[],
+            temperature=0.1,
+            max_tokens=220,
+            stream=True,
+        )
+
+    def test_stream_is_closed_when_preview_callback_cancels(self):
+        stream = MagicMock()
+        stream.__iter__.return_value = iter([
+            self.make_chunk("Geçerli bir cevap başlangıcı"),
+        ])
+        llm = self.make_llm(stream)
+
+        with self.assertRaises(KeyboardInterrupt):
+            llm.generate_answer_stream(
+                [],
+                on_update=MagicMock(side_effect=KeyboardInterrupt),
+            )
+
+        stream.close.assert_called_once_with()
 
 
 class FoundryStartupTests(unittest.TestCase):

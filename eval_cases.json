@@ -34,7 +34,7 @@
     "expectation": "relevant",
     "expected_source": "cybersecurity.txt",
     "min_score": 0.40,
-    "expected_chunk_terms": ["gönderen", "bağlantı", "çok faktörlü"]
+    "expected_context_terms": ["gönderen", "bağlantı", "çok faktörlü"]
   },
   {
     "name": "multi_factor_authentication",
@@ -50,7 +50,7 @@
     "expectation": "relevant",
     "expected_source": "cybersecurity.txt",
     "min_score": 0.40,
-    "expected_chunk_terms": ["üç kopya", "iki farklı ortamda", "geri yükleme"]
+    "expected_context_terms": ["üç kopya", "iki farklı ortamda", "geri yükleme"]
   },
   {
     "name": "out_of_scope_weather",

@@ -140,6 +140,10 @@ class CliEntrypointTests(unittest.TestCase):
 
         self.assertEqual(metadata["project"]["requires-python"], ">=3.11")
         self.assertEqual(metadata["project"]["scripts"]["local-rag"], "main:cli")
+        self.assertIn(
+            "prompt-toolkit==3.0.52",
+            metadata["project"]["dependencies"],
+        )
         self.assertEqual(
             metadata["tool"]["setuptools"]["dynamic"]["version"]["attr"],
             "app.__version__",
@@ -160,6 +164,8 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertIn("add", output)
         self.assertIn("remove", output)
         self.assertIn("benchmark", output)
+        self.assertIn("show", output)
+        self.assertIn("--project", output)
 
 
 if __name__ == "__main__":

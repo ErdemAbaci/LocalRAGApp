@@ -15,8 +15,48 @@ def calculate_cosine_similarities(question_embedding, chunk_embeddings):
     )[0]
 
 
-def get_top_chunks(question, top_k=3):
-    chunks = get_all_chunks()
+def document_order_key(chunk):
+    page_number = chunk.get("page_number")
+    chunk_index = chunk.get("chunk_index")
+    return (
+        chunk["source_name"].casefold(),
+        page_number if page_number is not None else 0,
+        chunk_index if chunk_index is not None else chunk["id"],
+        chunk["id"],
+    )
+
+
+def attach_neighbor_chunks(ranked_results, selected_results, radius=1):
+    if radius <= 0:
+        return [dict(result, neighbors=[]) for result in selected_results]
+
+    chunks_by_source = {}
+    for result in ranked_results:
+        chunks_by_source.setdefault(result["source_name"], []).append(result)
+
+    positions = {}
+    for source_chunks in chunks_by_source.values():
+        source_chunks.sort(key=document_order_key)
+        positions.update({chunk["id"]: index for index, chunk in enumerate(source_chunks)})
+
+    enriched_results = []
+    for result in selected_results:
+        source_chunks = chunks_by_source[result["source_name"]]
+        position = positions[result["id"]]
+        start = max(0, position - radius)
+        end = min(len(source_chunks), position + radius + 1)
+        neighbors = [
+            dict(chunk)
+            for chunk in source_chunks[start:end]
+            if chunk["id"] != result["id"]
+        ]
+        enriched_results.append(dict(result, neighbors=neighbors))
+
+    return enriched_results
+
+
+def get_top_chunks(question, top_k=3, source_name=None, neighbor_radius=1):
+    chunks = get_all_chunks(source_name=source_name)
 
     if not chunks:
         return []
@@ -67,5 +107,10 @@ def get_top_chunks(question, top_k=3):
         })
 
     results.sort(key=lambda item: item["score"], reverse=True)
+    selected_results = results[:top_k]
 
-    return results[:top_k]
+    return attach_neighbor_chunks(
+        results,
+        selected_results,
+        radius=neighbor_radius,
+    )

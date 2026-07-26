@@ -1,31 +1,48 @@
 import argparse
 import shlex
-import time
 
+import app.database as database_module
+import app.health as health_module
+import app.ingest as ingest_module
 from app import __version__
 from app.cli_output import (
+    DEBUG_COLOR,
+    MUTED_AMBER,
+    PRIMARY_BRIGHT,
+    rag_progress,
     activity,
     console,
     print_answer,
     print_banner as render_banner,
+    print_chunk_detail,
     print_health_report,
     print_info,
     print_issue,
     print_performance,
+    print_submitted_prompt,
     print_success,
     print_table,
     read_prompt,
 )
+from app.cli_input import CLIInputManager, CLIStatus
 from app.config import (
+    CONTEXT_RELATIVE_SCORE_MARGIN,
     CONTEXT_SCORE_THRESHOLD,
     EXTRACTIVE_SCORE_THRESHOLD,
+    MAX_CONTEXT_CHUNKS,
     MAX_EXTRACTIVE_CHARS,
     MIN_GENERATIVE_ANSWER_CHARS,
+    NEIGHBOR_CHUNK_RADIUS,
     SIMILARITY_THRESHOLD,
     TOP_K,
     USE_EXTRACTIVE_FALLBACK,
 )
-from app.database import DB_PATH, get_chunk_stats, get_indexed_sources
+from app.database import (
+    DB_PATH,
+    get_chunk_by_id,
+    get_chunk_stats,
+    get_indexed_sources,
+)
 from app.document_manager import (
     DocumentManagementError,
     add_document,
@@ -40,19 +57,41 @@ from app.embeddings import (
 from app.health import check_foundry, run_health_checks
 from app.index_state import get_index_freshness
 from app.retrieval import get_top_chunks
-from app.prompts import build_rag_messages
 from app.llm import (
     DEFAULT_MODEL_ALIAS,
     LocalLLM,
     MODEL_ALIAS,
     get_model_alias_source,
-    is_valid_answer,
 )
 from app.ingest import CHUNK_OVERLAP, CHUNK_SIZE, DOCS_DIR, ingest_documents
+from app.project import (
+    PROJECT_ENV_VAR,
+    ProjectConfigurationError,
+    get_project_paths,
+)
+from app.rag_service import EmptyIndexError, EmptyQuestionError, RAGService
+from app.session import SessionExportError, SessionHistory
 
 DEBUG = False
 
 _llm = None
+_source_filter = None
+_session_history = SessionHistory()
+PROJECT_PATHS = get_project_paths()
+
+
+def configure_project(project_path=None, environ=None):
+    global DB_PATH, DOCS_DIR, PROJECT_PATHS, _source_filter
+
+    paths = get_project_paths(project_path, environ=environ)
+    PROJECT_PATHS = paths
+    DB_PATH = paths.db_path
+    DOCS_DIR = paths.docs_dir
+    database_module.DB_PATH = paths.db_path
+    ingest_module.DOCS_DIR = paths.docs_dir
+    health_module.DOCS_DIR = paths.docs_dir
+    _source_filter = None
+    return paths
 
 
 def get_llm():
@@ -65,19 +104,59 @@ def get_llm():
 
 
 def print_banner():
-    render_banner(EMBEDDING_MODEL_NAME, MODEL_ALIAS)
+    render_banner(
+        EMBEDDING_MODEL_NAME,
+        MODEL_ALIAS,
+        project_root=PROJECT_PATHS.root,
+    )
+
+
+def get_cli_status():
+    try:
+        source_count = get_chunk_stats()["source_count"]
+    except Exception:
+        source_count = None
+
+    try:
+        freshness = get_index_freshness(DOCS_DIR, DB_PATH)
+        index_labels = {
+            "current": "indeks güncel",
+            "stale": "indeks güncel değil",
+            "untracked": "indeks izlenmiyor",
+            "missing": "indeks yok",
+            "error": "indeks kontrol edilemedi",
+        }
+        index_status = freshness.status
+        index_label = index_labels.get(index_status, "indeks bilinmiyor")
+    except Exception:
+        index_status = "error"
+        index_label = "indeks kontrol edilemedi"
+
+    return CLIStatus(
+        model_name=MODEL_ALIAS,
+        source_count=source_count,
+        index_label=index_label,
+        index_status=index_status,
+        source_filter=_source_filter,
+    )
 
 
 def print_help():
     print_table(
         "Komutlar",
-        [("Komut", "bold cyan", "left", True), ("Açıklama",)],
+        [("Komut", f"bold {PRIMARY_BRIGHT}", "left", True), ("Açıklama",)],
         [
             ("/help", "Komut listesini gösterir"),
             ("/stats", "İndeks, model ve eşik bilgilerini gösterir"),
             ("/model", "Model, cache ve yüklenme durumunu gösterir"),
             ("/config", "Aktif RAG ayarlarını salt okunur gösterir"),
             ("/sources", "İndeksteki dosya, sayfa ve chunk sayılarını gösterir"),
+            ("/show <chunk-id>", "İndeksteki chunk metnini gösterir"),
+            ("/filter <dosya|off>", "Oturumdaki aramayı bir kaynakla sınırlar"),
+            ("/ask [--source dosya] <soru>", "İsteğe bağlı kaynak filtresiyle sorar"),
+            ("/history", "Bu oturumdaki soru ve cevapları listeler"),
+            ("/repeat [id]", "Son veya seçilen soruyu yeniden çalıştırır"),
+            ("/export <markdown|json> [yol]", "Oturumu dosyaya aktarır"),
             ("/doctor", "Sistem bileşenlerinin sağlık durumunu kontrol eder"),
             ("/add <yol>", "TXT veya PDF dosyasını docs/ klasörüne ekler"),
             ("/remove <dosya>", "Dokümanı onay alarak docs/ klasöründen siler"),
@@ -89,6 +168,84 @@ def print_help():
         ],
         footer="Normal soru sormak için doğrudan yazman yeterli.",
     )
+
+
+def get_session_ids():
+    return _session_history.ids()
+
+
+def print_session_history():
+    if not _session_history.entries:
+        print_info("Bu oturumda henüz cevaplanmış soru yok.")
+        return True
+
+    mode_labels = {
+        "generative": "Üretken",
+        "extractive": "Doğrudan",
+        "fallback_extractive": "Kaynak metni",
+        "no_evidence": "Kanıt yok",
+    }
+    rows = []
+    for entry in _session_history.entries:
+        rows.append((
+            entry.id,
+            entry.question,
+            mode_labels.get(entry.mode, entry.mode),
+            entry.source_filter or "-",
+            f"{entry.timings['total_seconds']:.3f} sn",
+        ))
+
+    print_table(
+        "Oturum geçmişi",
+        [
+            ("ID", "dim", "right", True),
+            ("Soru", "bold", "left", False, "fold"),
+            ("Mod", PRIMARY_BRIGHT, "left", True),
+            ("Filtre", None, "left", True),
+            ("Toplam", None, "right", True),
+        ],
+        rows,
+        footer="/repeat [id] ile bir soruyu yeniden çalıştırabilirsin.",
+    )
+    return True
+
+
+def repeat_session_entry(entry_id=None):
+    entry = _session_history.get(entry_id)
+    if entry is None:
+        message = (
+            "Bu oturumda tekrarlanabilecek soru yok."
+            if entry_id is None
+            else f"Oturum geçmişinde {entry_id} numaralı kayıt yok."
+        )
+        print_issue("warning", message, solution="/history ile kayıtları kontrol et.")
+        return False
+
+    print_info(f"{entry.id}. soru yeniden çalıştırılıyor: {entry.question}")
+    return answer_question(
+        entry.question,
+        source_name=entry.source_filter,
+        use_active_filter=False,
+    )
+
+
+def export_session(export_format, output_path=None):
+    try:
+        destination = _session_history.export(
+            export_format,
+            PROJECT_PATHS.session_export_dir,
+            output_path=output_path,
+        )
+    except SessionExportError as error:
+        print_issue(
+            "warning",
+            str(error),
+            solution="Kullanım: /export <markdown|json> [dosya-yolu]",
+        )
+        return False
+
+    print_success(f"Oturum dışa aktarıldı · {destination}")
+    return True
 
 
 def print_model_info():
@@ -115,7 +272,7 @@ def print_model_info():
         "Model durumu",
         [
             ("Bileşen", "bold", "left", True),
-            ("Değer", "cyan", "left", False, "fold"),
+            ("Değer", PRIMARY_BRIGHT, "left", False, "fold"),
             ("Durum",),
         ],
         [
@@ -153,7 +310,7 @@ def print_config_info():
         "RAG yapılandırması",
         [
             ("Ayar", "bold", "left", True),
-            ("Değer", "cyan", "right", True),
+            ("Değer", PRIMARY_BRIGHT, "right", True),
             ("Açıklama",),
         ],
         [
@@ -167,6 +324,21 @@ def print_config_info():
                 "CONTEXT_SCORE_THRESHOLD",
                 CONTEXT_SCORE_THRESHOLD,
                 "LLM context'ine girecek minimum chunk skoru",
+            ),
+            (
+                "CONTEXT_RELATIVE_SCORE_MARGIN",
+                CONTEXT_RELATIVE_SCORE_MARGIN,
+                "En iyi sonuca göre izin verilen maksimum skor farkı",
+            ),
+            (
+                "NEIGHBOR_CHUNK_RADIUS",
+                NEIGHBOR_CHUNK_RADIUS,
+                "Üretken cevapta eşleşme çevresinden alınacak parça yarıçapı",
+            ),
+            (
+                "MAX_CONTEXT_CHUNKS",
+                MAX_CONTEXT_CHUNKS,
+                "Modele gönderilecek eşleşme ve komşuların toplam üst sınırı",
             ),
             (
                 "EXTRACTIVE_SCORE_THRESHOLD",
@@ -188,8 +360,8 @@ def print_config_info():
                 MIN_GENERATIVE_ANSWER_CHARS,
                 "Daha kısa LLM cevapları geçersiz sayılır",
             ),
-            ("CHUNK_SIZE", CHUNK_SIZE, "Bir chunk'ın hedef maksimum karakteri"),
-            ("CHUNK_OVERLAP", CHUNK_OVERLAP, "Ardışık chunklar arasındaki tekrar"),
+            ("CHUNK_SIZE", CHUNK_SIZE, "Özel tokenlar dahil maksimum token"),
+            ("CHUNK_OVERLAP", CHUNK_OVERLAP, "Ardışık chunklar arasındaki token tekrarı"),
             (
                 "LOCAL_RAG_MODEL",
                 MODEL_ALIAS,
@@ -197,6 +369,17 @@ def print_config_info():
             ),
             ("DOCS_DIR", DOCS_DIR, "İndekslenecek doküman klasörü"),
             ("DB_PATH", DB_PATH, "Üretilen SQLite indeks yolu"),
+            ("PROJECT_ROOT", PROJECT_PATHS.root, "Aktif Local RAG proje klasörü"),
+            (
+                "CLI_HISTORY",
+                PROJECT_PATHS.history_path,
+                "Yerel ve proje bazlı terminal geçmişi",
+            ),
+            (
+                "SESSION_EXPORTS",
+                PROJECT_PATHS.session_export_dir,
+                "Markdown ve JSON oturum çıktılarının varsayılan klasörü",
+            ),
         ],
         footer="Salt okunur görünüm; bu komut ayarları değiştirmez.",
     )
@@ -209,11 +392,12 @@ def print_stats():
 
     print_table(
         "Sistem durumu",
-        [("Ayar", "bold"), ("Değer", "cyan")],
+        [("Ayar", "bold"), ("Değer", PRIMARY_BRIGHT)],
         [
             ("Chunk sayısı", stats["total_chunks"]),
             ("Kaynak dosya", stats["source_count"]),
             ("İndeks durumu", freshness.display_status()),
+            ("Kaynak filtresi", _source_filter or "kapalı"),
             ("Veritabanı", stats["db_path"]),
             ("Embedding", short_embedding_name),
             ("LLM", MODEL_ALIAS),
@@ -222,6 +406,7 @@ def print_stats():
             ("Chunk size / overlap", f"{CHUNK_SIZE} / {CHUNK_OVERLAP}"),
             ("Similarity threshold", SIMILARITY_THRESHOLD),
             ("Context threshold", CONTEXT_SCORE_THRESHOLD),
+            ("Context relative margin", CONTEXT_RELATIVE_SCORE_MARGIN),
         ],
     )
 
@@ -283,7 +468,7 @@ def print_indexed_sources():
         "İndeksteki kaynaklar",
         [
             ("Dosya", "bold"),
-            ("Tür", "cyan", "left", True),
+            ("Tür", PRIMARY_BRIGHT, "left", True),
             ("Sayfa", None, "right", True),
             ("Chunk", None, "right", True),
         ],
@@ -297,16 +482,78 @@ def print_doctor_report():
     print_health_report(checks)
 
 
-def print_sources(chunks):
+def resolve_indexed_source_name(source_name):
+    clean_name = source_name.strip()
+    matches = [
+        source["source_name"]
+        for source in get_indexed_sources()
+        if source["source_name"].casefold() == clean_name.casefold()
+    ]
+    return matches[0] if matches else None
+
+
+def show_chunk_command(chunk_id):
+    try:
+        chunk = get_chunk_by_id(chunk_id)
+    except Exception as error:
+        print_issue(
+            "error",
+            "Chunk okunamadı.",
+            solution="/doctor ile veritabanını kontrol et.",
+            error=error,
+            debug=DEBUG,
+        )
+        return False
+
+    if chunk is None:
+        print_issue(
+            "warning",
+            f"ID {chunk_id} için bir chunk bulunamadı.",
+            solution="Geçerli ID değerlerini görmek için bir soru sor veya /sources çalıştır.",
+        )
+        return False
+
+    print_chunk_detail(chunk)
+    return True
+
+
+def set_source_filter(source_name):
+    global _source_filter
+
+    if source_name.strip().casefold() in {"off", "none", "kapat", "kapalı"}:
+        _source_filter = None
+        print_info("Kaynak filtresi kapatıldı.")
+        return True
+
+    canonical_name = resolve_indexed_source_name(source_name)
+    if canonical_name is None:
+        print_issue(
+            "warning",
+            f"İndekste {source_name} adlı kaynak bulunamadı.",
+            solution="Kaynak adlarını görmek için /sources çalıştır.",
+        )
+        return False
+
+    _source_filter = canonical_name
+    print_success(f"Kaynak filtresi etkin · {canonical_name}")
+    return True
+
+
+def print_sources(sources):
     rows = []
-    for chunk in chunks:
+    role_labels = {
+        "matched": "Eşleşme",
+        "neighbor": "Komşu",
+    }
+    for source in sources:
         rows.append(
             (
-                chunk["source_name"],
-                chunk.get("page_number") if chunk.get("page_number") is not None else "-",
-                chunk.get("chunk_index") if chunk.get("chunk_index") is not None else "-",
-                chunk["id"],
-                f"{chunk['score']:.4f}",
+                source.source_name,
+                source.page_number if source.page_number is not None else "-",
+                source.chunk_index if source.chunk_index is not None else "-",
+                role_labels.get(source.context_role, source.context_role),
+                source.id,
+                f"{source.score:.4f}",
             )
         )
 
@@ -316,78 +563,32 @@ def print_sources(chunks):
             ("Dosya", "bold"),
             ("Sayfa", None, "right", True),
             ("Parça", None, "right", True),
+            ("Rol", None, "left", True),
             ("ID", "dim", "right", True),
-            ("Skor", "cyan", "right", True),
+            ("Skor", PRIMARY_BRIGHT, "right", True),
         ],
         rows,
     )
 
 
-def print_debug_info(question, chunks, messages):
-    console.rule("[bold magenta]DEBUG[/bold magenta]", style="magenta")
+def print_debug_info(question, sources, messages):
+    console.rule(f"[bold {DEBUG_COLOR}]DEBUG[/bold {DEBUG_COLOR}]", style=DEBUG_COLOR)
     console.print("[bold]Kullanıcı sorusu[/bold]")
     console.print(question)
     console.print("\n[bold]Retrieved chunks[/bold]")
-    for chunk in chunks:
+    for source in sources:
         console.print(
-            f"[dim]ID {chunk['id']} · {chunk['source_name']} · "
-            f"skor {chunk['score']:.4f}[/dim]"
+            f"[dim]ID {source.id} · {source.source_name} · "
+            f"skor {source.score:.4f}[/dim]"
         )
-        console.print(chunk["chunk_text"])
+        console.print(source.chunk_text)
 
     console.print("\n[bold]Modele gönderilen mesajlar[/bold]")
     for message in messages:
-        console.print(f"[bold magenta]{message['role']}[/bold magenta]")
+        console.print(f"[bold {DEBUG_COLOR}]{message['role']}[/bold {DEBUG_COLOR}]")
         console.print(message["content"])
 
-    console.rule(style="magenta")
-
-
-def should_use_extractive_answer(context_chunks):
-    if not USE_EXTRACTIVE_FALLBACK:
-        return False
-
-    if len(context_chunks) != 1:
-        return False
-
-    best_chunk = context_chunks[0]
-
-    if best_chunk["score"] < EXTRACTIVE_SCORE_THRESHOLD:
-        return False
-
-    if len(best_chunk["chunk_text"]) > MAX_EXTRACTIVE_CHARS:
-        return False
-
-    return True
-
-
-def get_fallback_answer(context_chunks):
-    return context_chunks[0]["chunk_text"].strip()
-
-
-def generate_with_fallback(messages, context_chunks, llm=None):
-    fallback_answer = get_fallback_answer(context_chunks)
-
-    try:
-        llm_client = llm or get_llm()
-        generated_answer = llm_client.generate_answer(messages)
-    except Exception as error:
-        return (
-            fallback_answer,
-            "fallback_extractive",
-            "LLM yanıtı alınamadı; kaynak metin kullanıldı.",
-            error,
-        )
-
-    if not is_valid_answer(generated_answer):
-        return (
-            fallback_answer,
-            "fallback_extractive",
-            "LLM cevabı yeterli bulunmadı; kaynak metin kullanıldı.",
-            None,
-        )
-
-    return generated_answer, "generative", None, None
+    console.rule(style=DEBUG_COLOR)
 
 
 def run_command_safely(action, error_message, solution):
@@ -455,7 +656,7 @@ def add_document_command(source_path):
 def confirm_document_removal(source_name):
     try:
         answer = console.input(
-            f"\n[bold yellow]{source_name} silinsin mi?[/bold yellow] "
+            f"\n[bold {MUTED_AMBER}]{source_name} silinsin mi?[/bold {MUTED_AMBER}] "
             "[dim](e/H)[/dim] "
         )
     except (EOFError, KeyboardInterrupt):
@@ -547,7 +748,7 @@ def print_benchmark_report(report, report_path):
     print_table(
         "Model benchmark",
         [
-            ("Model", "bold cyan", "left", True),
+            ("Model", f"bold {PRIMARY_BRIGHT}", "left", True),
             ("Durum",),
             ("Yükleme", None, "right", True),
             ("İlk yanıt", None, "right", True),
@@ -560,7 +761,7 @@ def print_benchmark_report(report, report_path):
     print_table(
         "Benchmark cevapları",
         [
-            ("Model", "bold cyan", "left", True),
+            ("Model", f"bold {PRIMARY_BRIGHT}", "left", True),
             ("Soru", "bold"),
             ("Cevap",),
         ],
@@ -574,7 +775,10 @@ def run_benchmark_command(model_aliases=None):
 
     try:
         with activity("Model benchmark çalıştırılıyor..."):
-            report, report_path = run_model_benchmark(model_aliases)
+            report, report_path = run_model_benchmark(
+                model_aliases,
+                report_path=PROJECT_PATHS.benchmark_report_path,
+            )
     except BenchmarkPreparationError as error:
         print_issue(
             "error",
@@ -654,12 +858,124 @@ def handle_command(command_line):
         print_help()
         return "handled"
 
+    if leading_command in {"/history", "/repeat", "/export"}:
+        try:
+            arguments = shlex.split(stripped_command)
+        except ValueError as error:
+            print_issue(
+                "error",
+                "Komut argümanları okunamadı.",
+                solution="Boşluk içeren yolları çift tırnak içine al.",
+                error=error,
+                debug=DEBUG,
+            )
+            return "handled"
+
+        command_name = arguments[0].lower()
+        if command_name == "/history":
+            if len(arguments) != 1:
+                print_issue("warning", "Kullanım: /history")
+            else:
+                print_session_history()
+            return "handled"
+
+        if command_name == "/repeat":
+            if len(arguments) > 2 or (
+                len(arguments) == 2 and not arguments[1].isdigit()
+            ):
+                print_issue("warning", "Kayıt ID hatalı.", solution="Kullanım: /repeat [id]")
+            else:
+                entry_id = int(arguments[1]) if len(arguments) == 2 else None
+                repeat_session_entry(entry_id)
+            return "handled"
+
+        if len(arguments) not in {2, 3}:
+            print_issue(
+                "warning",
+                "Dışa aktarım komutu eksik veya hatalı.",
+                solution="Kullanım: /export <markdown|json> [dosya-yolu]",
+            )
+        else:
+            output_path = arguments[2] if len(arguments) == 3 else None
+            export_session(arguments[1], output_path)
+        return "handled"
+
     if normalized_command in INFO_COMMAND_MESSAGES:
         execute_command(normalized_command)
         return "handled"
 
     if normalized_command == "/reindex":
         execute_command(normalized_command)
+        return "handled"
+
+    if leading_command in {"/show", "/filter", "/ask"}:
+        try:
+            arguments = shlex.split(stripped_command)
+        except ValueError as error:
+            print_issue(
+                "error",
+                "Komut argümanları okunamadı.",
+                solution="Boşluk içeren değerleri çift tırnak içine al.",
+                error=error,
+                debug=DEBUG,
+            )
+            return "handled"
+
+        command_name = arguments[0].lower()
+
+        if command_name == "/show":
+            if len(arguments) != 2 or not arguments[1].isdigit():
+                print_issue(
+                    "warning",
+                    "Chunk ID eksik veya hatalı.",
+                    solution="Kullanım: /show <chunk-id>",
+                )
+            else:
+                show_chunk_command(int(arguments[1]))
+            return "handled"
+
+        if command_name == "/filter":
+            if len(arguments) == 1:
+                print_info(f"Kaynak filtresi: {_source_filter or 'kapalı'}")
+            elif len(arguments) == 2:
+                set_source_filter(arguments[1])
+            else:
+                print_issue(
+                    "warning",
+                    "Kaynak filtresi komutu hatalı.",
+                    solution="Kullanım: /filter <dosya-adı|off>",
+                )
+            return "handled"
+
+        source_name = None
+        question_parts = arguments[1:]
+        if question_parts[:1] == ["--source"]:
+            if len(question_parts) < 3:
+                print_issue(
+                    "warning",
+                    "Kaynak veya soru eksik.",
+                    solution="Kullanım: /ask --source <dosya-adı> <soru>",
+                )
+                return "handled"
+            source_name = resolve_indexed_source_name(question_parts[1])
+            if source_name is None:
+                print_issue(
+                    "warning",
+                    f"İndekste {question_parts[1]} adlı kaynak bulunamadı.",
+                    solution="Kaynak adlarını görmek için /sources çalıştır.",
+                )
+                return "handled"
+            question_parts = question_parts[2:]
+
+        if not question_parts:
+            print_issue(
+                "warning",
+                "Soru eksik.",
+                solution="Kullanım: /ask [--source <dosya-adı>] <soru>",
+            )
+            return "handled"
+
+        answer_question(" ".join(question_parts), source_name=source_name)
         return "handled"
 
     if normalized_command == "/debug on":
@@ -733,21 +1049,53 @@ def handle_command(command_line):
     return None
 
 
-def answer_question(question):
-    question = question.strip()
-
-    if not question:
+def answer_question(question, source_name=None, use_active_filter=True):
+    if not question.strip():
         print_issue("warning", "Soru boş olamaz.")
         return False
 
     warn_if_index_is_stale()
 
-    total_start_time = time.perf_counter()
-    retrieval_start_time = time.perf_counter()
+    active_source = source_name
+    if active_source is None and use_active_filter:
+        active_source = _source_filter
+
+    service = RAGService(
+        retrieval_func=get_top_chunks,
+        llm_factory=get_llm,
+    )
 
     try:
-        with activity("İlgili kaynaklar aranıyor..."):
-            chunks = get_top_chunks(question, top_k=TOP_K)
+        with rag_progress(MODEL_ALIAS) as progress:
+            result = service.answer(
+                question,
+                source_name=active_source,
+                activity_factory=progress.stage,
+                context_callback=print_debug_info if DEBUG else None,
+                stream_callback=(
+                    progress.update_answer if console.is_terminal else None
+                ),
+            )
+    except KeyboardInterrupt:
+        print_info("İşlem iptal edildi; kısmi cevap kaydedilmedi.")
+        return False
+    except EmptyQuestionError:
+        print_issue("warning", "Soru boş olamaz.")
+        return False
+    except EmptyIndexError:
+        if active_source:
+            print_issue(
+                "warning",
+                f"{active_source} kaynağında aranabilecek chunk bulunamadı.",
+                solution="/sources ile indeksi kontrol et veya /filter off çalıştır.",
+            )
+            return False
+        print_issue(
+            "warning",
+            "Aranabilecek bir indeks bulunamadı.",
+            solution="/reindex çalıştır.",
+        )
+        return False
     except Exception as error:
         print_issue(
             "error",
@@ -758,101 +1106,62 @@ def answer_question(question):
         )
         return False
 
-    retrieval_end_time = time.perf_counter()
-    retrieval_time = retrieval_end_time - retrieval_start_time
-
-    if not chunks:
+    if result.warning:
         print_issue(
             "warning",
-            "Aranabilecek bir indeks bulunamadı.",
-            solution="/reindex çalıştır.",
-        )
-        return False
-
-    best_score = chunks[0]["score"]
-
-    if best_score < SIMILARITY_THRESHOLD:
-        total_time = time.perf_counter() - total_start_time
-        print_answer(
-            "Bu bilgi verilen dokümanlarda yok.",
-            "no_evidence",
-            best_score,
-        )
-        print_performance(retrieval_time, 0.0, total_time)
-        return True
-
-    context_chunks = [
-        chunk
-        for chunk in chunks
-        if chunk["score"] >= CONTEXT_SCORE_THRESHOLD
-    ]
-
-    if not context_chunks:
-        context_chunks = [chunks[0]]
-
-    messages = build_rag_messages(question, context_chunks)
-
-    if DEBUG:
-        print_debug_info(question, context_chunks, messages)
-
-    generation_start_time = time.perf_counter()
-
-    if should_use_extractive_answer(context_chunks):
-        answer = context_chunks[0]["chunk_text"]
-        answer_mode = "extractive"
-    else:
-        activity_message = (
-            f"{MODEL_ALIAS} yükleniyor ve cevap hazırlanıyor..."
-            if _llm is None
-            else "Cevap hazırlanıyor..."
+            result.warning,
+            solution=result.warning_solution,
+            error=result.warning_error,
+            debug=DEBUG,
         )
 
-        with activity(activity_message):
-            answer, answer_mode, fallback_notice, llm_error = generate_with_fallback(
-                messages,
-                context_chunks,
-            )
-
-        if fallback_notice:
-            print_issue(
-                "warning",
-                fallback_notice,
-                solution="/doctor ile LLM durumunu kontrol et." if llm_error else None,
-                error=llm_error,
-                debug=DEBUG,
-            )
-
-    generation_time = time.perf_counter() - generation_start_time
-    total_time = time.perf_counter() - total_start_time
-
-    print_answer(answer, answer_mode, best_score)
-    print_sources(context_chunks)
-    print_performance(retrieval_time, generation_time, total_time)
+    print_answer(result.answer, result.mode, result.best_score)
+    if result.sources:
+        print_sources(result.sources)
+    print_performance(
+        result.timings.retrieval_seconds,
+        result.timings.generation_seconds,
+        result.timings.total_seconds,
+    )
+    _session_history.add_result(result)
     return True
 
 
 def main():
+    _session_history.clear()
     print_banner()
+    input_manager = CLIInputManager(
+        PROJECT_PATHS.history_path,
+        source_provider=get_indexed_sources,
+        fallback_reader=read_prompt,
+        echo_handler=print_submitted_prompt,
+        status_provider=get_cli_status,
+        session_id_provider=get_session_ids,
+    )
+    input_manager.start()
 
-    while True:
-        try:
-            question = read_prompt().strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Oturum kapatıldı.[/dim]")
-            break
+    try:
+        while True:
+            try:
+                question = input_manager.read().strip()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]Oturum kapatıldı.[/dim]")
+                break
 
-        if not question:
-            continue
+            if not question:
+                continue
 
-        command_result = handle_command(question)
+            command_result = handle_command(question)
 
-        if command_result == "exit":
-            break
+            if command_result == "exit":
+                break
 
-        if command_result == "handled":
-            continue
+            if command_result == "handled":
+                continue
 
-        answer_question(question)
+            answer_question(question)
+    finally:
+        input_manager.save()
 
 
 class TurkishArgumentParser(argparse.ArgumentParser):
@@ -886,6 +1195,14 @@ def build_cli_parser():
         help="Teknik retrieval ve hata ayrıntılarını gösterir.",
     )
     parser.add_argument(
+        "--project",
+        metavar="YOL",
+        help=(
+            "docs/ ve data/ klasörlerini içeren proje kökü "
+            f"(ortam alternatifi: {PROJECT_ENV_VAR})."
+        ),
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -898,6 +1215,10 @@ def build_cli_parser():
         help="Tek bir soru sorar ve işlem tamamlanınca çıkar.",
     )
     ask_parser.add_argument("question", nargs="+", help="Sorulacak metin")
+    ask_parser.add_argument(
+        "--source",
+        help="Aramayı yalnızca bu indekslenmiş kaynakla sınırlar.",
+    )
 
     add_parser = subparsers.add_parser(
         "add",
@@ -927,6 +1248,12 @@ def build_cli_parser():
         help=f"Karşılaştırılacak model alias'ları (varsayılan: {MODEL_ALIAS})",
     )
 
+    show_parser = subparsers.add_parser(
+        "show",
+        help="Bir chunk'ın tam metnini ID ile gösterir.",
+    )
+    show_parser.add_argument("chunk_id", type=int, help="Gösterilecek chunk ID")
+
     command_help = {
         "reindex": "docs/ klasörünü yeniden indeksler.",
         "stats": "İndeks ve sistem durumunu gösterir.",
@@ -945,7 +1272,14 @@ def build_cli_parser():
 def cli(argv=None):
     global DEBUG
 
-    args = build_cli_parser().parse_args(argv)
+    parser = build_cli_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        configure_project(args.project)
+    except ProjectConfigurationError as error:
+        parser.error(str(error))
+
     DEBUG = args.debug
 
     if args.command is None:
@@ -954,7 +1288,19 @@ def cli(argv=None):
 
     if args.command == "ask":
         question = " ".join(args.question)
-        return 0 if answer_question(question) else 1
+        source_name = None
+        if args.source:
+            source_name = resolve_indexed_source_name(args.source)
+            if source_name is None:
+                print_issue(
+                    "warning",
+                    f"İndekste {args.source} adlı kaynak bulunamadı.",
+                    solution="Kaynak adlarını görmek için local-rag sources çalıştır.",
+                )
+                return 1
+        if source_name is None:
+            return 0 if answer_question(question) else 1
+        return 0 if answer_question(question, source_name=source_name) else 1
 
     if args.command == "add":
         return 0 if add_document_command(args.path) else 1
@@ -964,6 +1310,9 @@ def cli(argv=None):
 
     if args.command == "benchmark":
         return 0 if run_benchmark_command(args.models) else 1
+
+    if args.command == "show":
+        return 0 if show_chunk_command(args.chunk_id) else 1
 
     return 0 if execute_command(f"/{args.command}") else 1
 

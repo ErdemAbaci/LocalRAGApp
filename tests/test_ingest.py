@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -12,7 +13,26 @@ from app import database
 from app.ingest import ingest_documents, split_long_text
 
 
+class WhitespaceTokenizer:
+    def num_special_tokens_to_add(self, pair=False):
+        return 2
+
+    def __call__(
+        self,
+        text,
+        add_special_tokens=False,
+        return_offsets_mapping=False,
+        truncation=False,
+        verbose=True,
+    ):
+        offsets = [match.span() for match in re.finditer(r"\S+", text)]
+        return {"offset_mapping": offsets}
+
+
 class ChunkingTests(unittest.TestCase):
+    def setUp(self):
+        self.tokenizer = WhitespaceTokenizer()
+
     def test_chunks_prefer_sentence_boundaries(self):
         text = (
             "Birinci cümle temel kavramı açıklar. "
@@ -20,19 +40,50 @@ class ChunkingTests(unittest.TestCase):
             "Üçüncü cümle sonucu açık biçimde özetler."
         )
 
-        chunks = split_long_text(text, chunk_size=70, chunk_overlap=25)
+        chunks = split_long_text(
+            text,
+            chunk_size=12,
+            chunk_overlap=2,
+            tokenizer=self.tokenizer,
+        )
 
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(chunk[0].isupper() for chunk in chunks))
-        self.assertTrue(all(len(chunk) <= 70 for chunk in chunks))
+        self.assertTrue(all(self.token_count(chunk) <= 12 for chunk in chunks))
 
     def test_chunks_do_not_start_inside_words(self):
         text = " ".join(f"kelime{i}" for i in range(40))
 
-        chunks = split_long_text(text, chunk_size=80, chunk_overlap=17)
+        chunks = split_long_text(
+            text,
+            chunk_size=10,
+            chunk_overlap=2,
+            tokenizer=self.tokenizer,
+        )
 
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(chunk.startswith("kelime") for chunk in chunks))
+
+    def test_chunk_limit_includes_model_special_tokens(self):
+        text = " ".join(f"token{i}" for i in range(35))
+
+        chunks = split_long_text(
+            text,
+            chunk_size=11,
+            chunk_overlap=3,
+            tokenizer=self.tokenizer,
+        )
+
+        self.assertTrue(all(self.token_count(chunk) <= 11 for chunk in chunks))
+
+    def token_count(self, text):
+        encoded = self.tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+            truncation=False,
+        )
+        return len(encoded["offset_mapping"]) + 2
 
 
 class AtomicReindexTests(unittest.TestCase):
@@ -94,6 +145,10 @@ class AtomicReindexTests(unittest.TestCase):
             patch("app.ingest.init_db"),
             patch("app.ingest.build_source_manifest", return_value=[]),
             patch("app.ingest.read_documents", return_value=documents),
+            patch(
+                "app.ingest.get_embedding_tokenizer",
+                return_value=WhitespaceTokenizer(),
+            ),
             patch("app.ingest.embed_texts", side_effect=RuntimeError("embedding hatası")),
             patch("app.ingest.replace_chunks") as replace_mock,
         ):
@@ -120,6 +175,10 @@ class AtomicReindexTests(unittest.TestCase):
             patch("app.ingest.init_db"),
             patch("app.ingest.build_source_manifest", side_effect=[manifest, manifest]),
             patch("app.ingest.read_documents", return_value=documents),
+            patch(
+                "app.ingest.get_embedding_tokenizer",
+                return_value=WhitespaceTokenizer(),
+            ),
             patch("app.ingest.embed_texts", return_value=[[0.1] * 384]),
             patch("app.ingest.replace_chunks") as replace_mock,
         ):
@@ -155,6 +214,10 @@ class AtomicReindexTests(unittest.TestCase):
                 side_effect=[original_manifest, changed_manifest],
             ),
             patch("app.ingest.read_documents", return_value=documents),
+            patch(
+                "app.ingest.get_embedding_tokenizer",
+                return_value=WhitespaceTokenizer(),
+            ),
             patch("app.ingest.embed_texts", return_value=[[0.1] * 384]),
             patch("app.ingest.replace_chunks") as replace_mock,
         ):

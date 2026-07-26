@@ -13,6 +13,7 @@ dependencies = [
     "numpy==2.0.2",
     "openai==2.44.0",
     "pypdf==6.14.2",
+    "prompt-toolkit==3.0.52",
     "rich==15.0.0",
     "scikit-learn==1.6.1",
     "sentence-transformers==5.1.2",

@@ -5,6 +5,7 @@ from pathlib import Path
 from app.config import SIMILARITY_THRESHOLD, TOP_K
 from app.database import get_all_chunks, get_chunk_stats
 from app.llm import is_valid_answer
+from app.rag_service import RAGService
 from app.retrieval import get_top_chunks
 
 
@@ -15,6 +16,7 @@ ANSWER_QUALITY_CASES = [
     ("", False),
     ("Kısa cevap", False),
     ("Kaynak: [Parça 1-3]", False),
+    ("Bu bilgi verilen dokümanlarda yok.", False),
     ("Gönderinin " * 18, False),
     ("Veri madenciliği, verilerden anlamlı bilgi çıkarma sürecidir.", True),
 ]
@@ -86,6 +88,30 @@ def evaluate_relevant_case(case, results):
     if missing_terms:
         return False, f"en iyi chunk içinde eksik kavramlar: {', '.join(missing_terms)}"
 
+    expected_context_terms = case.get("expected_context_terms", [])
+    if expected_context_terms:
+        service = RAGService()
+        matched_chunks = service.select_matched_context_chunks(results)
+        context_chunks = service.order_context_chunks(
+            service.expand_context_chunks(matched_chunks),
+            matched_chunks,
+        )
+        normalized_context = "\n".join(
+            chunk["chunk_text"]
+            for chunk in context_chunks
+        ).casefold()
+        missing_context_terms = [
+            term
+            for term in expected_context_terms
+            if term.casefold() not in normalized_context
+        ]
+
+        if missing_context_terms:
+            return False, (
+                "seçilen context içinde eksik kavramlar: "
+                f"{', '.join(missing_context_terms)}"
+            )
+
     detail = (
         f"kaynak={best_result['source_name']}, "
         f"skor={best_result['score']:.4f}"
@@ -93,6 +119,11 @@ def evaluate_relevant_case(case, results):
 
     if expected_chunk_terms:
         detail += f", kavram={len(expected_chunk_terms)}/{len(expected_chunk_terms)}"
+    if expected_context_terms:
+        detail += (
+            f", context_kavram="
+            f"{len(expected_context_terms)}/{len(expected_context_terms)}"
+        )
 
     return True, detail
 

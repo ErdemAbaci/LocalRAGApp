@@ -1,3 +1,6 @@
+from app.config import NO_EVIDENCE_ANSWER
+
+
 def build_rag_messages(question, chunks):
     context_parts = []
 
@@ -9,7 +12,7 @@ def build_rag_messages(question, chunks):
 
     context = "\n\n".join(context_parts)
 
-    system_prompt = """
+    system_prompt = f"""
 Sen bir doküman soru-cevap asistanısın.
 
 Görevin:
@@ -27,19 +30,25 @@ Kurallar:
 9. Soru tanım soruyorsa 1 veya 2 kısa paragrafla cevap ver.
 10. Eksik, yarım veya bozuk cümle kurma.
 11. Cevabı gereksiz uzatma; bağlamdaki ana bilgiyi özetle.
-12. Bağlam yetersizse sadece şu cümleyi yaz:
-Bu bilgi verilen dokümanlarda yok.
-13. Cevapta "Cevap:", "Kaynak:", dosya adı, skor veya parça numarası yazma.
+12. Bağlamda soruyu yanıtlayan açık bilgi varsa bunu kullan; "dokümanlarda yok" deme.
+13. Soru birden fazla unsur soruyorsa her unsuru ayrı ayrı karşıla.
+14. Bağlam yetersizse sadece şu cümleyi yaz:
+{NO_EVIDENCE_ANSWER}
+15. Cevapta "Cevap:", "Kaynak:", dosya adı, skor veya parça numarası yazma.
 """.strip()
 
     user_prompt = f"""
-Bağlam:
-{context}
-
 Soru:
 {question}
 
-Sadece bağlama göre kısa, net ve eksiksiz cevap ver. Kaynak etiketi ekleme.
+Bağlam:
+{context}
+
+Yanıtlanacak soru:
+{question}
+
+Sadece bağlama göre kısa, net ve eksiksiz cevap ver. Soruda istenen her
+unsuru karşıladığını kontrol et. Kaynak etiketi ekleme.
 """.strip()
 
     return [

@@ -162,11 +162,11 @@ def replace_chunks(chunks, source_manifest=None):
         conn.close()
 
 
-def get_all_chunks():
+def get_all_chunks(source_name=None):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    query = """
     SELECT
         id,
         source_name,
@@ -176,7 +176,15 @@ def get_all_chunks():
         chunk_text,
         embedding
     FROM chunks
-    """)
+    """
+    parameters = ()
+
+    if source_name is not None:
+        query += " WHERE source_name = ?"
+        parameters = (source_name,)
+
+    query += " ORDER BY id"
+    cursor.execute(query, parameters)
     rows = cursor.fetchall()
 
     conn.close()
@@ -195,6 +203,43 @@ def get_all_chunks():
         })
 
     return chunks
+
+
+def get_chunk_by_id(chunk_id):
+    if not DB_PATH.exists():
+        return None
+
+    init_db()
+    conn = get_connection()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT
+            id,
+            source_name,
+            source_type,
+            page_number,
+            chunk_index,
+            chunk_text
+        FROM chunks
+        WHERE id = ?
+        """, (chunk_id,))
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "source_name": row[1],
+        "source_type": row[2],
+        "page_number": row[3],
+        "chunk_index": row[4],
+        "chunk_text": row[5],
+    }
 
 
 def get_source_manifest(db_path=None):

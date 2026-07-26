@@ -5,13 +5,13 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from app.database import init_db, replace_chunks
-from app.embeddings import embed_texts
+from app.embeddings import embed_texts, get_embedding_tokenizer
 from app.index_state import build_source_manifest, list_document_paths
 
 
 DOCS_DIR = Path("docs")
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 110
+CHUNK_OVERLAP = 20
 SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)")
 
 
@@ -67,7 +67,8 @@ def read_documents():
     return documents
 
 
-def split_text_into_chunks(text):
+def split_text_into_chunks(text, tokenizer=None):
+    active_tokenizer = tokenizer or get_embedding_tokenizer()
     paragraphs = text.split("\n\n")
 
     chunks = []
@@ -76,82 +77,150 @@ def split_text_into_chunks(text):
         clean_paragraph = paragraph.strip()
 
         if clean_paragraph:
-            chunks.extend(split_long_text(clean_paragraph))
+            chunks.extend(
+                split_long_text(clean_paragraph, tokenizer=active_tokenizer)
+            )
 
     return chunks
 
 
-def split_long_text(text, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
+def split_long_text(
+    text,
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP,
+    tokenizer=None,
+):
     clean_text = " ".join(text.split())
 
-    if len(clean_text) <= chunk_size:
-        return [clean_text] if clean_text else []
+    if not clean_text:
+        return []
+
+    active_tokenizer = tokenizer or get_embedding_tokenizer()
+    special_token_count = active_tokenizer.num_special_tokens_to_add(pair=False)
+    content_limit = chunk_size - special_token_count
+
+    if content_limit < 1:
+        raise ValueError("Chunk boyutu modelin özel token sayısından büyük olmalıdır.")
+
+    if chunk_overlap < 0 or chunk_overlap >= content_limit:
+        raise ValueError("Chunk overlap, kullanılabilir token sınırından küçük olmalıdır.")
+
+    encoded = active_tokenizer(
+        clean_text,
+        add_special_tokens=False,
+        return_offsets_mapping=True,
+        truncation=False,
+        verbose=False,
+    )
+    offsets = [
+        tuple(offset)
+        for offset in encoded["offset_mapping"]
+        if offset[1] > offset[0]
+    ]
+
+    if len(offsets) <= content_limit:
+        return [clean_text]
 
     chunks = []
-    start = 0
+    start_token = 0
 
-    while start < len(clean_text):
-        end = min(start + chunk_size, len(clean_text))
+    while start_token < len(offsets):
+        hard_end_token = min(start_token + content_limit, len(offsets))
+        end_token = hard_end_token
 
-        if end < len(clean_text):
-            search_start = start + chunk_size // 2
-            sentence_ends = list(SENTENCE_END_PATTERN.finditer(clean_text, search_start, end))
+        if hard_end_token < len(offsets):
+            midpoint_token = min(
+                start_token + max(1, content_limit // 3),
+                hard_end_token - 1,
+            )
+            search_start = offsets[midpoint_token][0]
+            search_end = offsets[hard_end_token - 1][1]
+            sentence_ends = list(
+                SENTENCE_END_PATTERN.finditer(clean_text, search_start, search_end)
+            )
 
             if sentence_ends:
-                end = sentence_ends[-1].end()
+                sentence_end = sentence_ends[-1].end()
+                aligned_end = hard_end_token
+                while (
+                    aligned_end > start_token + 1
+                    and offsets[aligned_end - 1][1] > sentence_end
+                ):
+                    aligned_end -= 1
+                end_token = aligned_end
             else:
-                split_at = clean_text.rfind(" ", search_start, end)
+                end_token = align_token_end(
+                    clean_text,
+                    offsets,
+                    start_token,
+                    hard_end_token,
+                )
 
-                if split_at != -1:
-                    end = split_at
-
-        chunk = clean_text[start:end].strip()
+        start_char = offsets[start_token][0]
+        end_char = offsets[end_token - 1][1]
+        chunk = clean_text[start_char:end_char].strip()
 
         if chunk:
             chunks.append(chunk)
 
-        if end >= len(clean_text):
+        if end_token >= len(offsets):
             break
 
-        desired_start = max(end - chunk_overlap, start + 1)
-        next_start = align_chunk_start(clean_text, desired_start, end)
-        start = max(next_start, start + 1)
+        desired_start = max(end_token - chunk_overlap, start_token + 1)
+        next_start = align_token_start(
+            clean_text,
+            offsets,
+            desired_start,
+            end_token,
+        )
+        start_token = max(next_start, start_token + 1)
 
     return chunks
 
 
-def align_chunk_start(text, desired_start, previous_end):
-    if desired_start <= 0:
-        return 0
+def align_token_end(text, offsets, start_token, hard_end_token):
+    minimum_end = start_token + max(1, (hard_end_token - start_token) // 2)
+    end_token = hard_end_token
 
-    sentence_ends = list(SENTENCE_END_PATTERN.finditer(text, desired_start, previous_end))
+    while end_token > minimum_end:
+        end_char = offsets[end_token - 1][1]
+        if end_char >= len(text) or text[end_char].isspace():
+            break
+        end_token -= 1
 
-    if sentence_ends:
-        start = sentence_ends[0].end()
+    return max(end_token, start_token + 1)
 
-        while start < len(text) and text[start].isspace():
-            start += 1
 
-        if start < previous_end:
-            return start
+def align_token_start(text, offsets, desired_start, previous_end):
+    previous_end_char = offsets[previous_end - 1][1]
+    if text[previous_end_char - 1] in ".!?":
+        return previous_end
 
-    if text[previous_end - 1] in ".!?":
-        start = previous_end
+    desired_char = offsets[desired_start][0]
+    sentence_end = SENTENCE_END_PATTERN.search(
+        text,
+        desired_char,
+        previous_end_char,
+    )
 
-        while start < len(text) and text[start].isspace():
-            start += 1
+    if sentence_end is not None:
+        aligned_char = sentence_end.end()
+        next_token = desired_start
+        while (
+            next_token < previous_end
+            and offsets[next_token][0] < aligned_char
+        ):
+            next_token += 1
 
-        return start
+        if next_token < previous_end:
+            return next_token
 
-    next_space = text.find(" ", desired_start, previous_end)
-
-    if next_space != -1:
-        return next_space + 1
-
-    previous_space = text.rfind(" ", 0, desired_start)
-
-    if previous_space != -1:
-        return previous_space + 1
+    next_token = desired_start
+    while next_token < previous_end:
+        start_char = offsets[next_token][0]
+        if start_char == 0 or not text[start_char - 1].isalnum():
+            return next_token
+        next_token += 1
 
     return desired_start
 
@@ -160,10 +229,11 @@ def ingest_documents():
     init_db()
     source_manifest = build_source_manifest(DOCS_DIR)
     documents = read_documents()
+    tokenizer = get_embedding_tokenizer()
     indexed_chunks = []
 
     for document in documents:
-        chunks = split_text_into_chunks(document["text"])
+        chunks = split_text_into_chunks(document["text"], tokenizer=tokenizer)
 
         if not chunks:
             continue

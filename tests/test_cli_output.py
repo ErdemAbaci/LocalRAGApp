@@ -2,14 +2,21 @@ import io
 import unittest
 from contextlib import redirect_stdout
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import main
 from app.cli_output import (
     ANSWER_MODE_STYLES,
+    MUTED_AMBER,
+    MUTED_GREEN,
+    PLAIN_INPUT_PROMPT,
+    PRIMARY_BRIGHT,
+    READLINE_INPUT_PROMPT,
+    RAGProgress,
     print_answer,
     print_issue,
     print_performance,
+    read_prompt,
 )
 from app.index_state import IndexFreshness
 
@@ -18,6 +25,7 @@ class CliOutputTests(unittest.TestCase):
     def tearDown(self):
         main.DEBUG = False
         main._llm = None
+        main._source_filter = None
 
     def test_print_issue_hides_technical_detail_by_default(self):
         buffer = io.StringIO()
@@ -36,6 +44,37 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("Çözüm", output)
         self.assertIn("/doctor çalıştır.", output)
         self.assertNotIn("gizli teknik ayrıntı", output)
+
+    def test_read_prompt_is_registered_with_readline_in_terminal(self):
+        fake_console = SimpleNamespace(
+            is_terminal=True,
+            color_system="truecolor",
+            print=MagicMock(),
+        )
+
+        with patch("app.cli_output.console", fake_console):
+            with patch("app.cli_output.sys.stdin.isatty", return_value=True):
+                with patch("builtins.input", return_value="/sources") as input_func:
+                    result = read_prompt()
+
+        self.assertEqual(result, "/sources")
+        fake_console.print.assert_called_once_with()
+        input_func.assert_called_once_with(READLINE_INPUT_PROMPT)
+
+    def test_read_prompt_uses_plain_text_without_tty(self):
+        fake_console = SimpleNamespace(
+            is_terminal=False,
+            color_system=None,
+            print=MagicMock(),
+        )
+
+        with patch("app.cli_output.console", fake_console):
+            with patch("builtins.input", return_value="RAG nedir?") as input_func:
+                result = read_prompt()
+
+        self.assertEqual(result, "RAG nedir?")
+        self.assertEqual(PLAIN_INPUT_PROMPT, "> ")
+        input_func.assert_called_once_with(PLAIN_INPUT_PROMPT)
 
     def test_print_issue_shows_technical_detail_in_debug_mode(self):
         buffer = io.StringIO()
@@ -115,11 +154,65 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("Toplam", output)
         self.assertIn("4.280 sn", output)
 
+    def test_rag_progress_reuses_one_status_for_all_stages(self):
+        status = MagicMock()
+        fake_console = SimpleNamespace(
+            is_terminal=True,
+            status=MagicMock(return_value=status),
+        )
+        progress = RAGProgress("phi-4-mini", console_instance=fake_console)
+
+        with progress:
+            with progress.stage("retrieval"):
+                pass
+            with progress.stage("model"):
+                pass
+            with progress.stage("generation"):
+                pass
+
+        fake_console.status.assert_called_once()
+        status.start.assert_called_once_with()
+        status.stop.assert_called_once_with()
+        self.assertGreaterEqual(status.update.call_count, 5)
+        self.assertEqual(
+            progress.render().plain,
+            "✓ Arama  ·  ✓ phi-4-mini  ·  ✓ Yanıt",
+        )
+
+    def test_rag_progress_switches_from_status_to_transient_answer(self):
+        status = MagicMock()
+        live = MagicMock()
+        live_factory = MagicMock(return_value=live)
+        fake_console = SimpleNamespace(
+            is_terminal=True,
+            status=MagicMock(return_value=status),
+        )
+        progress = RAGProgress(
+            "phi-4-mini",
+            console_instance=fake_console,
+            live_factory=live_factory,
+        )
+
+        with progress:
+            with progress.stage("retrieval"):
+                pass
+            with progress.stage("model"):
+                pass
+            with progress.stage("generation"):
+                progress.update_answer("İlk cevap parçası")
+                progress.update_answer("Tam cevap metni")
+
+        status.stop.assert_called_once_with()
+        live.start.assert_called_once_with(refresh=True)
+        live.update.assert_called_once()
+        live.stop.assert_called_once_with()
+        self.assertTrue(live_factory.call_args.kwargs["transient"])
+
     def test_answer_modes_have_distinct_turkish_labels_and_styles(self):
         expected_modes = {
-            "generative": ("Üretken", "cyan"),
-            "extractive": ("Doğrudan", "green"),
-            "fallback_extractive": ("Kaynak metni", "yellow"),
+            "generative": ("Üretken", PRIMARY_BRIGHT),
+            "extractive": ("Doğrudan", MUTED_GREEN),
+            "fallback_extractive": ("Kaynak metni", MUTED_AMBER),
             "no_evidence": ("Kanıt bulunamadı", "bright_black"),
         }
 
@@ -195,8 +288,14 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("RAG yapılandırması", output)
         self.assertIn("TOP_K", output)
         self.assertIn("SIMILARITY_THRESHOLD", output)
+        self.assertIn("CONTEXT_RELATIVE", output)
+        self.assertIn("NEIGHBOR_CHUNK_RADI", output)
+        self.assertIn("MAX_CONTEXT_CHUNKS", output)
         self.assertIn("CHUNK_SIZE", output)
         self.assertIn("DOCS_DIR", output)
+        self.assertIn("PROJECT_ROOT", output)
+        self.assertIn("CLI_HISTORY", output)
+        self.assertIn("SESSION_EXPORTS", output)
         self.assertIn("Salt okunur", output)
 
     def test_stats_command_shows_index_freshness(self):
@@ -220,6 +319,22 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("İndeks durumu", output)
         self.assertIn("güncel", output)
 
+    def test_cli_status_is_structured_and_keeps_active_filter(self):
+        main._source_filter = "example.txt"
+
+        with patch("main.get_chunk_stats", return_value={"source_count": 3}):
+            with patch(
+                "main.get_index_freshness",
+                return_value=IndexFreshness("current"),
+            ):
+                status = main.get_cli_status()
+
+        self.assertEqual(status.model_name, main.MODEL_ALIAS)
+        self.assertEqual(status.source_count, 3)
+        self.assertEqual(status.index_label, "indeks güncel")
+        self.assertEqual(status.index_status, "current")
+        self.assertEqual(status.source_filter, "example.txt")
+
     def test_help_lists_model_config_and_document_commands(self):
         buffer = io.StringIO()
 
@@ -232,6 +347,9 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("/add", output)
         self.assertIn("/remove", output)
         self.assertIn("/benchmark", output)
+        self.assertIn("/show", output)
+        self.assertIn("/filter", output)
+        self.assertIn("/ask", output)
 
     def test_get_llm_preserves_foundry_output_only_in_debug_mode(self):
         main.DEBUG = True

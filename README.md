@@ -10,17 +10,26 @@ yapmaz; mevcut dokumanlardan ilgili parcalari bulup cevaba baglam saglar.
 ## Neler Sunuyor?
 
 - UTF-8 TXT ve metin tabanli PDF destegi
-- Cumle ve kelime sinirlarini gozeten overlap'li chunking
+- Embedding modelinin 128 token sinirina uygun, cumle odakli token-aware chunking
 - Cok dilli, 384 boyutlu yerel embedding modeli
 - SQLite icinde atomik chunk, embedding ve kaynak manifesti yonetimi
 - Cosine similarity ile semantic retrieval
+- Relevance ile secilen, belge sirasiyla modele verilen context
+- Esik alti komsulari disarida birakan sinirli onceki/sonraki context genisletme
 - Kanita gore `extractive`, `generative` ve `fallback_extractive` cevap modlari
 - Zayif kanitta LLM'i calistirmadan guvenli kapsam disi cevabi
 - Kaynak dosya, PDF sayfasi, chunk kimligi ve benzerlik skoru gosterimi
 - Indeks guncelligi, sistem sagligi ve model cache kontrolleri
 - Guvenli dokuman ekleme/silme komutlari
+- Chunk metnini ID ile inceleme ve kaynak bazli arama filtresi
+- Her klasorden calisma, proje bazli gecmis ve canli slash komut menusu
+- Model/kaynak/indeks/filtre durum satiri ve baglamsal komut ipuclari
+- Arama, model hazirlama ve yanit icin tek satirli asama gostergesi
+- Uretken cevaplarda token geldikce guncellenen canli yanit ve guvenli iptal
+- Oturum ici soru/cevap gecmisi, yeniden calistirma ve Markdown/JSON export
+- `Ctrl+L`, `Esc` ve baglama duyarli `Ctrl+C` klavye kisayollari
 - Model kalite ve hiz benchmark'i
-- Rich tabanli Turkce terminal arayuzu
+- Rich ve prompt-toolkit tabanli Turkce terminal arayuzu
 
 ## RAG Akisi
 
@@ -44,7 +53,7 @@ flowchart LR
 Uygulama yeterli kanit bulamazsa tam olarak su cevabi verir:
 
 ```text
-Bu bilgi verilen dokumanlarda yok.
+Bu bilgi verilen dokümanlarda yok.
 ```
 
 ## Teknoloji Yigini
@@ -57,7 +66,7 @@ Bu bilgi verilen dokumanlarda yok.
 | Retrieval | scikit-learn L2 normalization ve NumPy normalized dot product |
 | Veri deposu | SQLite, JSON olarak saklanan embeddingler |
 | PDF okuma | `pypdf` |
-| Terminal arayuzu | `rich` |
+| Terminal arayuzu | `rich`, `prompt-toolkit` |
 
 ## Kurulum
 
@@ -102,7 +111,7 @@ local-rag
 Interaktif oturumda soruyu dogrudan yazabilirsin:
 
 ```text
-rag> Veri madenciligi surecleri nedir?
+> Veri madenciligi surecleri nedir?
 ```
 
 Tek seferlik kullanim:
@@ -119,12 +128,14 @@ local-rag ask "Veri madenciligi surecleri nedir?"
 
 ```text
 local-rag ask "RAG nedir?"
+local-rag ask --source example.txt "RAG nedir?"
 local-rag add "/dosya/yolu/notlar.pdf"
 local-rag remove "notlar.pdf"
 local-rag remove "notlar.pdf" --yes
 local-rag reindex
 local-rag stats
 local-rag sources
+local-rag show 156
 local-rag doctor
 local-rag model
 local-rag config
@@ -141,6 +152,12 @@ local-rag --help
 | `/model` | Model, cache ve lazy-load durumunu gosterir. |
 | `/config` | Aktif RAG ayarlarini salt okunur gosterir. |
 | `/sources` | Indeksteki dosya, sayfa ve chunk sayilarini listeler. |
+| `/show <chunk-id>` | Chunk metadata'sini ve tam kaynak metnini gosterir. |
+| `/filter <dosya\|off>` | Oturumdaki aramalari bir kaynakla sinirlar veya filtreyi kapatir. |
+| `/ask [--source dosya] <soru>` | Kalici filtreyi degistirmeden tek soru sorar. |
+| `/history` | Bu oturumda basariyla tamamlanan soru ve cevaplari listeler. |
+| `/repeat [id]` | Son veya numarasi verilen soruyu ayni kaynak filtresiyle yeniden calistirir. |
+| `/export <markdown\|json> [yol]` | Oturumu yapilandirilmis bir dosyaya aktarir. |
 | `/doctor` | Sistem bilesenlerini kontrol eder. |
 | `/add <yol>` | TXT veya PDF dosyasini `docs/` klasorune ekler. |
 | `/remove <dosya>` | Dokumani onay alarak siler. |
@@ -152,6 +169,58 @@ local-rag --help
 
 `add` ve `remove` islemleri otomatik embedding uretmez. Dokuman degisikliginden
 sonra uygulamanin bildirdigi gibi `local-rag reindex` calistirilmalidir.
+
+## Proje Yolu ve Terminal Deneyimi
+
+Editable kurulumdan sonra `local-rag` herhangi bir klasorden calistirilabilir.
+Varsayilan olarak kurulu Local RAG repository'sindeki `docs/` ve `data/`
+yollari kullanilir.
+
+Baska bir Local RAG calisma klasoru secmek icin global `--project` secenegini
+alt komuttan once yaz:
+
+```bash
+local-rag --project /dosya/yolu/rag-calismasi stats
+local-rag --project /dosya/yolu/rag-calismasi ask "RAG nedir?"
+```
+
+Kalici terminal tercihi icin ortam degiskeni kullanilabilir:
+
+```bash
+export LOCAL_RAG_HOME=/dosya/yolu/rag-calismasi
+local-rag
+```
+
+Oncelik `--project`, `LOCAL_RAG_HOME`, varsayilan repository kokudur. Secilen
+klasor var olmalidir; `docs/` ve `data/` bu kokun altinda aranir.
+
+Interaktif terminalde giris alani cercevelidir. `/` yazildiginda komutlar ve
+kisa aciklamalari girisin ustunde canli olarak acilir; ok tuslari secim yapar,
+Tab aktif secimi tamamlar. Ayni tamamlama sistemi indeksli kaynak adlarini,
+`/debug` degerlerini ve `/add` dosya yollarini da destekler. Yukari/asagi ok ile
+onceki girdiler getirilebilir. Gecmis proje bazinda `data/cli_history` dosyasinda
+yalnizca yerel olarak ve kullaniciya ozel dosya izniyle saklanir. Bu ozellik
+konusma hafizasi degildir; eski sorular modele otomatik context olarak verilmez.
+
+`/history` ise shell giris gecmisinden farkli olarak yalnizca mevcut uygulama
+oturumunda basariyla tamamlanan RAG sonuclarini tutar. `/repeat` secilen soruyu
+orijinal kaynak filtresiyle yeniden calistirir. `/export markdown` ve `/export
+json` cevaplari, modlari, skorlari, sureleri ve kaynak metadata'sini varsayilan
+olarak `data/exports/` altina yazar; tam chunk metinleri export edilmez ve var
+olan dosyanin uzerine yazilmaz.
+
+Komut adlari ve argumanlari yazilirken farkli renklendirilir. Parametre isteyen
+bir komut secildiginde, ornegin `/show <chunk-id>`, kullanim bicimi giris
+kutusunda gorunur. Kutunun altindaki kompakt satir aktif modeli, kaynak sayisini,
+indeks guncelligini ve varsa kaynak filtresini gosterir. Bir soru calisirken
+arama, model hazirlama ve yanit uretme ayri satirlar acmak yerine ayni ilerleme
+satirinda asama asama guncellenir.
+
+Uretken cevapta ilk token geldikten sonra ilerleme satiri canli cevap paneline
+donusur. Generation sirasinda `Ctrl+C` akisi kapatir, kismi cevabi gecmise
+eklemez ve oturumu acik tutar. Giris alaninda `Ctrl+C` yazili metni temizler;
+alan zaten bossa oturumu kapatir. `Esc` acik onerileri kapatir, `Ctrl+L` terminal
+gorunumunu temizler.
 
 ## Model Secimi
 
@@ -209,12 +278,13 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval.py
 
 Son dogrulanan durumda:
 
-- `81/81` birim testi basarili
+- `153/153` birim testi basarili
 - `11/11` retrieval ve cevap kalite kontrolu basarili
-- 3 kaynak dosya ve 16 chunk saglikli
+- 3 kaynak dosya ve 24 chunk saglikli; maksimum chunk uzunlugu 109 token
 
-Eval seti yalnizca dogru kaynak ve skoru degil, beklenen chunk kavramlarini ve
-kapsam disi sorularin LLM'e gonderilmeden reddedilmesini de kontrol eder.
+Eval seti yalnizca dogru kaynak ve skoru degil, en iyi chunk veya modele giden
+sinirli context icindeki beklenen kavramlari ve kapsam disi sorularin LLM'e
+gonderilmeden reddedilmesini de kontrol eder.
 
 ## Proje Yapisi
 
@@ -222,7 +292,8 @@ kapsam disi sorularin LLM'e gonderilmeden reddedilmesini de kontrol eder.
 .
 |-- app/
 |   |-- benchmark.py       # Model hiz ve cevap kalite karsilastirmasi
-|   |-- cli_output.py      # Rich terminal gorunumu
+|   |-- cli_input.py       # Canli menu, durum satiri, ipuclari ve gecmis
+|   |-- cli_output.py      # Rich tema ve asamali islem gostergesi
 |   |-- config.py          # Retrieval ve cevap esikleri
 |   |-- database.py        # SQLite semasi ve atomik yazimlar
 |   |-- document_manager.py # Guvenli dokuman ekleme/silme
@@ -232,7 +303,10 @@ kapsam disi sorularin LLM'e gonderilmeden reddedilmesini de kontrol eder.
 |   |-- ingest.py          # TXT/PDF okuma ve chunking
 |   |-- llm.py             # Foundry Local ve cevap kalite kontrolu
 |   |-- prompts.py         # Turkce RAG promptu
-|   `-- retrieval.py       # Cosine similarity ve siralama
+|   |-- project.py         # --project ve LOCAL_RAG_HOME yol cozumu
+|   |-- rag_service.py     # Yapilandirilmis RAG sonuc ve karar akisi
+|   |-- session.py         # Oturum gecmisi, tekrar verisi ve guvenli export
+|   `-- retrieval.py       # Cosine similarity, filtreleme ve siralama
 |-- docs/                  # Indekslenecek kullanici dokumanlari
 |-- tests/                 # Deterministik birim ve entegrasyon testleri
 |-- benchmark_cases.json   # Model benchmark vakalari
@@ -255,6 +329,17 @@ kapsam disi sorularin LLM'e gonderilmeden reddedilmesini de kontrol eder.
 - **Lazy loading:** LLM yalnizca generative cevap gerektiginde yuklenir.
 - **Olculebilir gelisim:** Retrieval, fallback ve cevap temizligi deterministik
   testlerle korunur.
+- **Sunumdan bagimsiz cekirdek:** RAG servisi cevabi, kaynaklari ve sureleri
+  yapilandirilmis nesneler olarak dondurur; Rich yalnizca bunlari gosterir.
+- **Token siniri:** Chunklar karakter sayisiyla degil embedding tokenizer'iyla
+  olculur; modelin goremeyecegi kuyruk metni uretilmez.
+- **Context ayrimi:** Chunklar skorla secilir, LLM'e belge sirasiyla verilir;
+  en iyi sonuca cok uzak eslesmeler ve esik alti komsular disarida birakilir.
+- **Yanlis ret korumasi:** Retrieval yeterli kanit buldugu halde model
+  `Bu bilgi verilen dokumanlarda yok.` derse cevap gecersiz sayilir. Fallback,
+  soruyla en cok ortusen kaynak cumlelerini secerek guvenli bir cevap verir.
+- **Guvenli oturum kaydi:** Yalnizca tamamlanan sonuclar oturum gecmisine girer;
+  export kaynak metadata'sini tutar fakat tam chunk metinlerini tasimaz.
 
 Daha ayrintili mimari anlatim ve ogrenme notlari icin
 [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) dosyasina bakabilirsin.
@@ -267,19 +352,21 @@ Daha ayrintili mimari anlatim ve ogrenme notlari icin
   koleksiyonlara yoneliktir.
 - SQLite icinde JSON embedding saklamak V1 ve ogrenme amaci icin uygundur,
   buyuk veri setleri icin vector database gerekebilir.
-- Konusma gecmisi ve takip sorusu cozumleme henuz yoktur.
-- Uygulama su anda repository kok dizininden calistirilmalidir.
+- Oturum gecmisi listeleme/tekrar/export icindir; onceki cevaplar henuz modele
+  conversation context olarak verilmez ve takip sorulari cozumlenmez.
 
 ## Yol Haritasi
 
-CLI, indeks yonetimi, eval ve model benchmark asamalari tamamlandi. V2 icin
-degerlendirilecek ana yonler:
+CLI, indeks yonetimi, eval, model benchmark, kaynak denetimi, proje yolu,
+canli komut menusu, cerceveli giris, klavye kisayollari, streaming cevap,
+guvenli iptal, oturum export'u, token-aware chunking ve komsu context tamamlandi.
+Sonraki sistem odakli yonler:
 
-- FastAPI ile `ask`, `reindex` ve `stats` endpointleri
-- Streamlit ile dokuman ve soru-cevap arayuzu
-- Kaynak filtresi ve chunk goruntuleme
-- Neighbor chunk genisletme veya reranking
-- Conversation history ve takip sorulari
+- Yalnizca degisen dokumanlari isleyen incremental reindex
+- Dosya bazli indeksleme ilerleme ve hata ozeti
+- Dense retrieval ile SQLite FTS5/BM25'i birlestiren hybrid search
+- Daha buyuk aday havuzu icin reranking
+- Takip sorulari icin kontrollu conversation history
 - OCR destegi
 - Daha buyuk koleksiyonlar icin vector database degerlendirmesi
 

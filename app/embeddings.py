@@ -29,6 +29,10 @@ def get_embedding_model():
     return _embedding_model
 
 
+def get_embedding_tokenizer():
+    return get_embedding_model().tokenizer
+
+
 def embed_text(text):
     model = get_embedding_model()
 
