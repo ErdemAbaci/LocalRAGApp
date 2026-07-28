@@ -4,64 +4,205 @@
     "question": "RAG nedir?",
     "expectation": "relevant",
     "expected_source": "example.txt",
-    "min_score": 0.40
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "retrieval-augmented generation",
+        "context olarak"
+      ]
+    ]
   },
   {
     "name": "embedding_definition",
     "question": "Embedding nedir?",
     "expectation": "relevant",
     "expected_source": "example.txt",
-    "min_score": 0.40
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "sayısal vektörlere",
+        "birbirine yakın"
+      ]
+    ]
   },
   {
     "name": "data_mining_process",
     "question": "Veri madenciliği süreçleri nedir?",
     "expectation": "relevant",
     "expected_source": "datamining.pdf",
-    "min_score": 0.40
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "büyük veri yığınları",
+        "ön işleme adımlarından geçirilmesi"
+      ],
+      [
+        "veri temizleme, veri bütünleştirme, veri indirgeme ve veri dönüştürme"
+      ]
+    ]
   },
   {
     "name": "security_goals",
     "question": "Bilgi güvenliğinin üç temel hedefi nelerdir?",
     "expectation": "relevant",
     "expected_source": "cybersecurity.txt",
-    "min_score": 0.40,
-    "expected_chunk_terms": ["gizlilik", "bütünlük", "erişilebilirlik"]
+    "min_score": 0.4,
+    "expected_chunk_terms": [
+      "gizlilik",
+      "bütünlük",
+      "erişilebilirlik"
+    ],
+    "relevant_chunk_terms": [
+      [
+        "gizlilik",
+        "bütünlük",
+        "erişilebilirlik"
+      ]
+    ]
   },
   {
     "name": "phishing_definition",
     "question": "Kimlik avı mesajlarında gönderen adresi ve bağlantılar nasıl kontrol edilmelidir?",
     "expectation": "relevant",
     "expected_source": "cybersecurity.txt",
-    "min_score": 0.40,
-    "expected_context_terms": ["gönderen", "bağlantı", "çok faktörlü"]
+    "min_score": 0.4,
+    "expected_context_terms": [
+      "gönderen",
+      "bağlantı",
+      "çok faktörlü"
+    ],
+    "relevant_chunk_terms": [
+      [
+        "gönderen adresi",
+        "gerçek hedef adres"
+      ]
+    ]
   },
   {
     "name": "multi_factor_authentication",
     "question": "Çok faktörlü kimlik doğrulama neden kullanılır?",
     "expectation": "relevant",
     "expected_source": "cybersecurity.txt",
-    "min_score": 0.40,
-    "expected_chunk_terms": ["iki veya daha fazla", "parola", "güvenlik anahtarı"]
+    "min_score": 0.4,
+    "expected_chunk_terms": [
+      "iki veya daha fazla",
+      "parola",
+      "güvenlik anahtarı"
+    ],
+    "relevant_chunk_terms": [
+      [
+        "iki veya daha fazla bağımsız kanıt",
+        "güvenlik anahtarı"
+      ]
+    ]
   },
   {
     "name": "backup_rule",
     "question": "Güvenli yedekleme için 3-2-1 kuralı ne önerir?",
     "expectation": "relevant",
     "expected_source": "cybersecurity.txt",
-    "min_score": 0.40,
-    "expected_context_terms": ["üç kopya", "iki farklı ortamda", "geri yükleme"]
+    "min_score": 0.4,
+    "expected_context_terms": [
+      "üç kopya",
+      "iki farklı ortamda",
+      "geri yükleme"
+    ],
+    "relevant_chunk_terms": [
+      [
+        "üç kopyasının",
+        "iki farklı ortamda"
+      ]
+    ]
+  },
+  {
+    "name": "incident_response_steps",
+    "question": "Güvenlik olayı fark edildiğinde hangi adımlar izlenir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "olayın kapsamı belirlenir",
+        "kök neden analizi"
+      ]
+    ]
+  },
+  {
+    "name": "data_transformation",
+    "question": "Veri dönüştürme aşamasında kategorik veriler ne yapılır?",
+    "expectation": "relevant",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "kategorik veriler sayısal değerlere dönüştürülebilir"
+      ]
+    ]
   },
   {
     "name": "out_of_scope_weather",
     "question": "Hava nasıl?",
     "expectation": "not_found",
-    "max_score": 0.20
+    "max_score": 0.2
   },
   {
     "name": "out_of_scope_cooking",
     "question": "Çikolatalı kek kaç derecede pişirilir?",
     "expectation": "not_found",
-    "max_score": 0.20
+    "max_score": 0.2
+  },
+  {
+    "name": "hard_negative_backup_frequency",
+    "question": "Yedekleme ne sıklıkla alınmalıdır?",
+    "expectation": "not_found",
+    "max_score": 0.2,
+    "difficulty": "hard",
+    "note": "Dokümanda yedekleme anlatılıyor ama sıklık hiç belirtilmiyor.",
+    "known_gap": true
+  },
+  {
+    "name": "hard_negative_password_length",
+    "question": "Parola en az kaç karakter uzunluğunda olmalıdır?",
+    "expectation": "not_found",
+    "max_score": 0.2,
+    "difficulty": "hard",
+    "note": "Parola birçok chunkta geçiyor ama uzunluk kuralı yok.",
+    "known_gap": true
+  },
+  {
+    "name": "hard_negative_ransomware_tool",
+    "question": "Fidye yazılımının şifrelediği dosyaları çözmek için hangi araç kullanılır?",
+    "expectation": "not_found",
+    "max_score": 0.2,
+    "difficulty": "hard",
+    "note": "Fidye yazılımı yedekleme bağlamında geçiyor; şifre çözme aracı yok.",
+    "known_gap": true
+  },
+  {
+    "name": "hard_negative_kmeans_cluster_count",
+    "question": "K-means algoritmasında küme sayısı nasıl seçilir?",
+    "expectation": "not_found",
+    "max_score": 0.2,
+    "difficulty": "hard",
+    "note": "Kümeleme bir yöntem olarak anılıyor; k-means detayı yok.",
+    "known_gap": true
+  },
+  {
+    "name": "hard_negative_normalization_formula",
+    "question": "Min-max normalizasyon formülü nedir?",
+    "expectation": "not_found",
+    "max_score": 0.2,
+    "difficulty": "hard",
+    "note": "Normalleştirme aşama olarak geçiyor; formül verilmiyor.",
+    "known_gap": true
+  },
+  {
+    "name": "hard_negative_firewall_rules",
+    "question": "Güvenlik duvarı kuralları nasıl yapılandırılmalıdır?",
+    "expectation": "not_found",
+    "max_score": 0.2,
+    "difficulty": "hard",
+    "note": "Siber güvenlik dokümanında güvenlik duvarı hiç geçmiyor.",
+    "known_gap": true
   }
 ]

@@ -1,0 +1,17 @@
+{
+  "summary": {
+    "case_count": 9,
+    "recall_at_1": 0.6666666666666666,
+    "recall_at_3": 0.9444444444444444,
+    "recall_at_5": 1.0,
+    "mrr": 0.8333333333333334
+  },
+  "hard_negative_scores": {
+    "hard_negative_backup_frequency": 0.28575003147125244,
+    "hard_negative_password_length": 0.29594022035598755,
+    "hard_negative_ransomware_tool": 0.45985543727874756,
+    "hard_negative_kmeans_cluster_count": 0.5505423545837402,
+    "hard_negative_normalization_formula": 0.2402578890323639,
+    "hard_negative_firewall_rules": 0.5984848141670227
+  }
+}

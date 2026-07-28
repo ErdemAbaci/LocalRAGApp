@@ -68,8 +68,11 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 - `app/llm.py`: Süre sınırlı Foundry başlangıcı, `LOCAL_RAG_MODEL`, streaming completion, cevap temizleme ve tekrar döngüsü dahil kalite doğrulaması.
 - `app/session.py`: Başarılı RAG sonuçlarının oturum içi geçmişini, tekrar seçimini ve üzerine yazma korumalı Markdown/JSON export'unu yönetir.
 - `benchmark_cases.json`: Modellerin aynı context ve beklenen kavramlarla karşılaştırıldığı üretken cevap vakaları.
-- `eval.py`: İndeks sağlığı, cevap kalite kararı ve retrieval regression değerlendirmesi.
-- `eval_cases.json`: Deterministik retrieval test soruları ve beklentileri.
+- `eval.py`: İndeks sağlığı, imza doğrulaması, cevap kalite kararı, retrieval regression değerlendirmesi, Recall@k/MRR raporu ve `--compare`/`--update-baseline` baseline akışı.
+- `app/eval_metrics.py`: Retrieval metriklerinin saf hesabı; imza eşleştirme, Recall@k, MRR, baseline karşılaştırması ve Türkçe duyarlı metin normalizasyonu.
+- `eval_cases.json`: Deterministik retrieval test soruları, içerik imzaları ve hard negative vakaları.
+- `eval_baseline.json`: Son onaylanan Recall@k/MRR ve hard negative skorları; `--compare` bu dosyaya göre fark üretir.
+- `tests/test_eval_metrics.py`: İmza eşleştirme, Türkçe normalizasyon, Recall@k, MRR, bozuk etiket tespiti ve baseline karşılaştırma testleri.
 - `tests/test_benchmark.py`: Benchmark hazırlama, cold/warm ölçüm, kalite ve hata raporu testleri.
 - `tests/test_eval.py`: Kaynak, skor, en iyi chunk ve genişletilmiş context kavramı değerlendirme testleri.
 - `tests/test_ingest.py`: Token sınırı, cümle/kelime hizası, atomik reindex, `/sources` şema güvenliği ve CLI çıktı testleri.
@@ -89,7 +92,10 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 - `README.md`: Kurulum, kullanım, mimari, benchmark, test sonuçları, sınırlamalar ve V2 yol haritasını özetleyen ana proje sunumu.
 - `PROJECT_GUIDE.md`: Projenin uzun, öğretici teknik anlatımı ve roadmap'i.
 - `INSTRUCTIONS.md`: İlk proje hedefleri; güncel gerçeklik için her zaman kodu ve bu dosyayı esas al.
-- `docs/`: İndekslenecek kullanıcı dokümanları.
+- `CLAUDE.md`: Claude Code için çalışma kuralları ve kodda gözden kaçan noktalar; proje bağlamı için bu dosyaya yönlendirir.
+- `docs/LEARNING_NOTES.md`: Projedeki RAG kavramlarının sıfırdan açıklaması ve ileriki kararlar için terim referansı. İndekslenmez.
+- `tools/term_evidence_analysis.py`: Keşif aracı; uygulamanın parçası değildir. Soru kelimelerinin modele giden context'te geçme oranını vaka ve grup bazında ölçer. Kelime kanıtı sinyalinin tasarımını beslemek için kullanılır.
+- `docs/`: İndekslenecek kullanıcı dokümanları (`.txt` ve `.pdf`).
 - `data/`: Üretilen yerel SQLite verisi; Git'e eklenmez.
 
 ## 5. Korunması Gereken Davranışlar
@@ -133,8 +139,47 @@ Bu değerler mevcut küçük veri seti ve regression testlerine göre seçildi. 
 Son doğrulanan durumda:
 
 - 3 kaynak dosya ve 24 chunk bulunuyor. En uzun chunk özel tokenlar dahil 109 tokendır; embedding modelinin 128 token sınırını aşan parça yoktur. `cybersecurity.txt` beş ayrı güvenlik konusu içeriyor.
-- Retrieval ve indeks değerlendirmesi `11/11` başarılı.
-- Unit testler `153/153` başarılı (token-aware chunking, göreli context seçimi, soru odaklı extractive fallback, komşu/context sırası, yanlış LLM ret fallback'i, context eval, RAG servis katmanı, streaming/iptal callback'leri, oturum geçmişi/export, kaynak filtreleme/görüntüleme, proje yolu, canlı slash menüsü, klavye kısayolları, terminal durum satırı/renklendirme/ipucu, giriş geçmişi/tamamlama, benchmark, retrieval, atomik reindex/manifest, güvenli TXT/PDF yönetimi ve LLM cevap temizliği).
+- Retrieval ve indeks değerlendirmesi `14/14` başarılı; ayrıca `6` bilinen boşluk (`GAP`) raporlanıyor.
+- Retrieval metrikleri: `Recall@1 = 0.6667`, `Recall@3 = 0.9444`, `Recall@5 = 1.0000`, `MRR = 0.8333` (9 etiketli vaka).
+  `Recall@5 = 1.0` doğru chunk'ın her zaman ilk 5 aday içinde olduğunu, sorunun bulma değil **sıralama** olduğunu gösterir; reranking'in etki alanı budur.
+- Hard negative ölçümü kritik bir sınırı ortaya çıkardı: cevabı dokümanda hiç
+  bulunmayan `hard_negative_firewall_rules` sorusu `0.5985` alırken, cevabı
+  bulunan `rag_definition` `0.5570` alıyor. Yani **hiçbir tek `SIMILARITY_THRESHOLD`
+  değeri bu ikisini ayıramaz.** Cosine similarity konu benzerliğini ölçer, cevap
+  içerip içermediğini değil. Bu boşluğun çözümü eşik ayarı değil; BM25 terim
+  kanıtı, cross-encoder ve groundedness kontrolüdür.
+- **Doğrulanmış hata: yanlış ret koruması tuzak sorularda ters çalışıyor.**
+  `app/llm.get_answer_validation_error()` LLM tam olarak `NO_EVIDENCE_ANSWER`
+  ürettiğinde bunu `false_no_evidence` sayıp geçersiz kılıyor ve
+  `rag_service.generate_with_fallback()` kaynak metnine dönüyor. Bu koruma
+  "arama doğru, LLM inatçı" varsayımına dayanıyor. Hard negative sorularda arama
+  yanlış olduğu için varsayım tersine dönüyor: manuel testte
+  `hard_negative_ransomware_tool` sorusunda model doğru biçimde
+  "Bu bilgi verilen dokümanlarda yok." dedi, sistem bu **doğru** cevabı silip
+  alakasız bir yedekleme cümlesi gösterdi. Uyarı metni
+  "LLM bulunan kanıtı kullanmadı" ile bu yol tanınabilir.
+- Manuel LLM testi (6 hard negative, `phi-4-mini`): 5 soruda üretken cevap
+  üretildi, 1 soruda yukarıdaki yanlış ret koruması devreye girdi. Hiçbirinde
+  kullanıcıya kapsam dışı cevabı gösterilmedi.
+- Retrieval bazı hard negative'lerde tamamen alakasız context seçiyor:
+  "Parola en az kaç karakter olmalıdır?" sorusunun en iyi eşleşmesi, kategorik
+  verilerin 0/1'e dönüştürülmesini anlatan `datamining.pdf` chunk'ı.
+- **Kelime kanıtı ölçümü (17 eval sorusu).** Sorunun içerik kelimelerinin modele
+  giden context'te geçme oranı, cosine skorunun ayıramadığı iki grubu net
+  ayırıyor:
+
+  | | Cosine | Kelime kanıtı (tam eşleşme) |
+  |---|---|---|
+  | Alakalı | 0.5570 – 0.8761 | 0.71 – 1.00 |
+  | Hard negative | 0.2403 – 0.5985 | 0.00 – 0.33 |
+  | Örtüşme | var | yok (0.33 → 0.71 boşluğu) |
+
+  Kaba kök alma (kelimenin ilk 4-5 harfi) bu sinyali **bozuyor**: alakalı en
+  düşük 0.80'e çıkarken hard negative en yüksek 0.75'e fırlıyor ve boşluk
+  0.38'den 0.05'e düşüyor. Sebep yanlış eşleşmeler: `sayısı`→`sayısal`,
+  `yapılandırılmalıdır`→`yapılır`. Bu iş için kesinlik, kapsayıcılıktan
+  önemlidir; Türkçe kök alma tasarımı bu kısıtla yapılmalıdır.
+- Unit testler `175/175` başarılı (token-aware chunking, göreli context seçimi, soru odaklı extractive fallback, komşu/context sırası, yanlış LLM ret fallback'i, context eval, RAG servis katmanı, streaming/iptal callback'leri, oturum geçmişi/export, kaynak filtreleme/görüntüleme, proje yolu, canlı slash menüsü, klavye kısayolları, terminal durum satırı/renklendirme/ipucu, giriş geçmişi/tamamlama, benchmark, retrieval, atomik reindex/manifest, güvenli TXT/PDF yönetimi ve LLM cevap temizliği).
 - `/sources` indeksteki dosya, tür, sayfa ve chunk sayılarını gösterir; boş indeks, eksik `chunks` tablosu ve eski şema senaryolarında çökmez.
 - `/doctor` dokümanları, indeks güncelliğini, veritabanını, 384 boyutlu embeddingleri, Foundry kurulumunu ve `phi-4-mini` cache dosyalarını model yüklemeden kontrol eder.
 - CLI hataları kullanıcı mesajı ve çözüm önerisi gösterir; teknik exception yalnızca debug modunda görünür.
@@ -258,6 +303,19 @@ Hugging Face ağı kapalıysa ve model daha önce cache'e indirilmişse:
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval.py
 ```
 
+Retrieval'a dokunan değişikliklerde metrik farkını göster:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval.py --compare
+```
+
+Baseline'ı yalnızca değişikliğin kasıtlı bir iyileşme olduğu doğrulandıktan
+sonra güncelle. Gerilemeyi baseline'ı ezerek gizleme:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval.py --update-baseline
+```
+
 Ingestion, chunking veya embedding değişikliğinde:
 
 1. Unit testleri çalıştır.
@@ -327,17 +385,51 @@ Tamamlanan yakın özellikler:
 - Token-aware chunking: embedding modelinin 128 token sınırına uygun 110/20 parçalama, cümle/kelime hizası ve kesilmeyen embedding girdisi sağlar.
 - Context hazırlama: relevance ile seçim, belge düzeninde prompt, skorlu komşu genişletme, 5 parça üst sınırı ve kaynak rolü sağlar.
 
-Sonraki CLI hedeflerini şu sırayla ele al:
+Sıradaki hedefleri şu sırayla ele al:
 
-1. Değişen dosya odaklı incremental reindex ve dosya bazlı ilerleme.
-2. SQLite FTS5/BM25 ile dense retrieval'ı birleştiren hybrid search.
-3. Daha geniş aday havuzu için reranking.
+0. ~~**Eval güçlendirmesi.**~~ **Tamamlandı.** Recall@k ve MRR metrikleri,
+   içerik imzasıyla etiketlenmiş ground truth, 6 hard negative vaka, bozuk etiket
+   tespiti (`case_labels`) ve `eval_baseline.json` üzerinden `--compare` akışı.
+1. **Chunking karşılaştırma deneyi.** 110/20 dışındaki konfigürasyonları aynı
+   eval setinde ölç; seçimi ölçümle gerekçelendir. Artık `--compare` ile
+   Recall@k/MRR farkı doğrudan görülebilir.
+2. **Yanlış pozitif savunması.** Başlangıçta "eşiklerin veri temelli
+   kalibrasyonu" olarak planlanmıştı; 0. adımın ölçümü kapsamı değiştirdi.
+   Hard negative skorları alakalı soru skorlarıyla **iç içe geçiyor**, bu yüzden
+   tek bir eşik değeri ikisini ayıramaz. Eşik kalibrasyonu yine yapılmalı ama
+   tek başına yeterli değil; terim kanıtı (soru terimleri context'te gerçekten
+   geçiyor mu) ve groundedness sinyali birlikte değerlendirilmeli.
+3. **Hybrid search.** SQLite FTS5/BM25 ile dense retrieval'ı birleştir. Hard
+   negative bulgusu bunu güçlendiriyor: "güvenlik duvarı" hiçbir chunk'ta
+   geçmiyor, BM25 bunu anında görür.
+   *Mimari karar: skor birleştirme stratejisi (RRF vs ağırlıklı normalizasyon).*
+4. **Reranking.** Geniş aday havuzunu cross-encoder ile yeniden sırala.
+   *Mimari karar: aday sayısı ve kabul edilebilir latency bütçesi.*
+5. **Conversation history.** Asıl iş takip sorusu değil, query rewriting; soruyu
+   retrieval'a bağımsız (standalone) biçimde ver.
+   *Mimari karar: rewriting tasarımı ve geçmiş bütçesi.*
 
-Daha sonraki V2 seçenekleri:
+Bu sıranın gerekçesi: 0–2 **ölçme yeteneği** kazandırır, 3–5 ise ancak o yetenek
+varsa öğretici ve doğrulanabilir olur. Hybrid search ve reranking'in iddiası
+"retrieval kalitesini artırmak"tır; iyi bir eval olmadan bu iddia ölçülemez.
 
-- OCR desteği
-- Conversation history ve takip soruları
-- Daha büyük koleksiyonlar için vector database değerlendirmesi
+Fırsat buldukça ele alınacaklar (öncelikli değil):
+
+- **Cevap groundedness kontrolü.** `is_valid_answer()` şu an cevabın biçimini
+  denetliyor, context'e sadakatini değil. n-gram örtüşmesi gibi basit bir ölçüt
+  bile gerçek bir güvenlik katmanı olur. 0. adımın hard negative bulgusundan
+  sonra bu madde önceliğini artırdı; 2. adımla birlikte ele alınabilir.
+- **Incremental reindex.** Ancak `time local-rag reindex` rahatsız edici hale
+  geldiğinde. Mevcut ölçekte (3 dosya, 24 chunk) çözülecek bir problem yok.
+- **Ölçekleme deneyi.** Chunk sayısını sentetik olarak artırıp brute force
+  cosine aramanın nerede kırıldığını ölç. Bu bir vector database migration'ı
+  değildir; ANN/HNSW'nin neden var olduğunu ölçerek öğrenmek içindir.
+- **OCR desteği.** Yalnızca gerçekten taranmış PDF ihtiyacı doğarsa.
+
+Kapsam dışı bırakılanlar: vector database'e geçiş (mevcut ölçekte gereksiz,
+öğrenme değeri kütüphane öğrenmekten ibaret) ve otomatik model karşılaştırma
+raporu (`app/benchmark.py` bu ihtiyacı zaten karşılıyor). Web arayüzü ve API
+sunucusu proje hedefinde değildir.
 
 ## 13. Bir Görevi Tamamlama Kriteri
 

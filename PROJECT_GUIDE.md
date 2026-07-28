@@ -2,7 +2,7 @@
 
 Bu belge, projeye birkaç gün veya birkaç ay ara verdikten sonra geri döndüğümüzde "hangi dosya ne yapıyordu?", "sistem nasıl çalışıyordu?" ve "sırada ne vardı?" sorularına hızlıca cevap vermek için hazırlandı.
 
-Belgenin anlattığı durum: **10 Temmuz 2026**.
+Belgenin anlattığı durum: **26 Temmuz 2026**.
 
 ## 1. Projenin amacı
 
@@ -68,6 +68,7 @@ local-rag-assistant/
 │   ├── embeddings.py
 │   ├── health.py
 │   ├── index_state.py
+│   ├── eval_metrics.py
 │   ├── ingest.py
 │   ├── llm.py
 │   ├── prompts.py
@@ -81,15 +82,19 @@ local-rag-assistant/
 ├── docs/
 │   ├── example.txt
 │   ├── datamining.pdf
-│   └── cybersecurity.txt
+│   ├── cybersecurity.txt
+│   └── LEARNING_NOTES.md     # Kavram referansı; indekslenmez
 ├── eval.py
 ├── eval_cases.json
+├── eval_baseline.json         # Onaylanan Recall@k/MRR referansı
 ├── benchmark_cases.json
 ├── embedding_test.py
 ├── foundry_test.py
 ├── main.py
 ├── requirements.txt
 ├── tests/
+├── AGENTS.md
+├── CLAUDE.md                 # Claude Code çalışma kuralları
 └── PROJECT_GUIDE.md
 ```
 
@@ -491,29 +496,94 @@ Kontroller:
 - En iyi chunk beklenen ana kavramları gerçekten içeriyor mu?
 - Doküman dışı soru similarity eşiğinin altında kalıyor mu?
 
-Çalıştırma:
+Ayrıca retrieval metriklerini hesaplar ve baseline ile karşılaştırır:
 
 ```bash
-python eval.py
+python eval.py                    # çalıştır ve raporla
+python eval.py --compare          # eval_baseline.json ile farkı göster
+python eval.py --update-baseline  # güncel metrikleri baseline olarak kaydet
 ```
 
 Son doğrulanan sonuç:
 
 ```text
-PASS  index_health
-PASS  answer_quality
-PASS  rag_definition
-PASS  embedding_definition
-PASS  data_mining_process
-PASS  security_goals
-PASS  phishing_definition
-PASS  multi_factor_authentication
-PASS  backup_rule
-PASS  out_of_scope_weather
-PASS  out_of_scope_cooking
+14/14 test başarılı
+6 bilinen boşluk (GAP) raporlandı; pass/fail kapısına dahil değil.
 
-11/11 test başarılı
+Recall@1 : 0.6667
+Recall@3 : 0.9444
+Recall@5 : 1.0000
+MRR      : 0.8333
 ```
+
+**Neden metrik gerekliydi?** Eski eval yalnızca `results[0]`'a bakıyor ve "doğru
+dosya geldi mi" diye soruyordu. `11/11 PASS` diyordu ama doğru chunk üç vakada
+1. sırada değildi; bu tamamen görünmezdi. Recall@1'in 0.6667 olması bunu sayıyla
+gösterir. Hybrid search ve reranking tam olarak bu sıralamayı düzeltmeye
+çalışacağı için, onları ölçebilmenin ön şartı bu metriklerdi.
+
+`Recall@5 = 1.0000` ayrıca değerli bir bilgidir: doğru chunk **her zaman** ilk 5
+adayın içinde. Yani retrieval doğru parçayı buluyor, sadece yanlış sıralıyor —
+reranking'in birebir çözmek için var olduğu durum budur.
+
+### `app/eval_metrics.py`
+
+Metrik hesabının saf ve test edilebilir kısmıdır. Veritabanı, embedding veya
+dosya sistemi bilmez; retrieval sonuçlarını ve imzaları alıp Recall@k ile MRR
+üretir. Bu ayrım sayesinde metrik mantığı gerçek model yüklemeden test edilir.
+
+**Ground truth neden chunk ID ile etiketlenmiyor?** Chunk ID'leri `AUTOINCREMENT`
+olduğu için her reindex'te değişir (şu an 212'den başlıyorlar) ve chunking ayarı
+değiştiğinde chunk sınırları da kayar. ID bazlı etiketler ilk chunking deneyinde
+tamamen geçersiz olurdu. Bunun yerine **içerik imzası** kullanılır: imza, doğru
+chunk'ı benzersiz kılan terimlerin listesidir ve bir chunk o terimlerin hepsini
+içeriyorsa imzayı karşılar.
+
+İmza yaklaşımının tek gerçek riski yanlış yazılmış bir imzanın sessizce
+"bulunamadı" sayılıp metrikleri haksız yere düşürmesidir. `case_labels`
+kontrolü bunu ayrı bir hata olarak yüzeye çıkarır: her imza indekste en az bir
+chunk tarafından karşılanmalıdır.
+
+**Türkçe metin normalizasyonu.** Python'un `casefold()` fonksiyonu Türkçe'yi
+doğru küçültmez: `"İ".casefold()` sonucu `"i"` değil `"i" + U+0307` olur ve
+`"I".casefold()` `"ı"` yerine `"i"` verir. Ham `casefold()` ile büyük harfle
+yazılmış bir imza sessizce eşleşmezdi. `normalize_text()` Türkçe eşlemeyi elle
+yapıp artakalan birleşen noktayı temizler; metin karşılaştıran bütün eval kodu
+bu fonksiyonu kullanır.
+
+### Hard negative vakalar ve `known_gap`
+
+Kapsam dışı vakaların ilk hali çok kolaydı (`Hava nasıl?` → 0.069). Gerçek
+zorluk, konusu dokümana yakın ama cevabı dokümanda bulunmayan sorulardır. Altı
+hard negative vaka bu amaçla eklendi ve **altısı da** mevcut eşiği geçti:
+
+| Vaka | Skor | Cevabı dokümanda var mı? |
+|---|---:|---|
+| `hard_negative_firewall_rules` | 0.5985 | Hayır |
+| `hard_negative_kmeans_cluster_count` | 0.5505 | Hayır |
+| `hard_negative_ransomware_tool` | 0.4599 | Hayır |
+| `hard_negative_password_length` | 0.2959 | Hayır |
+| `hard_negative_backup_frequency` | 0.2858 | Hayır |
+| `hard_negative_normalization_formula` | 0.2403 | Hayır |
+
+Bu ölçümün en önemli sonucu şudur: `hard_negative_firewall_rules` (0.5985),
+cevabı dokümanda **bulunan** `rag_definition` sorusundan (0.5570) daha yüksek
+skor alıyor. Yani **hiçbir tek `SIMILARITY_THRESHOLD` değeri bu ikisini
+ayıramaz.** 0.5985'i eleyen bir eşik `RAG nedir?` sorusunu da eler.
+
+Sebep kavramsaldır: cosine similarity **konu benzerliğini** ölçer, sorunun
+cevabının context'te bulunup bulunmadığını değil. "Güvenlik duvarı kuralları"
+sorusu siber güvenlik dokümanına konu olarak gerçekten benzer.
+
+Bu yüzden çözüm eşik ayarı değildir. Gerçek sinyaller başka yerdedir: BM25 terim
+kanıtı ("güvenlik duvarı" hiçbir chunk'ta geçmiyor), cross-encoder'ın soru-chunk
+etkileşimi ve cevap groundedness kontrolü.
+
+Bu vakalar `known_gap: true` ile işaretlidir: `GAP` olarak raporlanır ve
+baseline'a yazılır ama pass/fail kapısını düşürmez. Amaç eval'i kalıcı kırmızıda
+tutmamaktır; sürekli kırmızı bir test paketi kısa sürede görmezden gelinir ve
+regression koruması ölür. Bir `known_gap` vakası geçmeye başlarsa çıktı `FIXED`
+der ve bayrağın kaldırılması gerektiğini söyler.
 
 ### `eval_cases.json`
 
@@ -826,8 +896,11 @@ Son eval ve unit test çalışmasında:
 ```text
 24 chunk
 3 kaynak dosya
-11/11 eval testi başarılı
-153/153 unit testi başarılı
+14/14 eval testi başarılı (+6 bilinen boşluk, GAP)
+175/175 unit testi başarılı
+
+Recall@1 = 0.6667   Recall@3 = 0.9444
+Recall@5 = 1.0000   MRR      = 0.8333
 ```
 
 Başarılı kontroller:
@@ -891,20 +964,105 @@ Başarılı kontroller:
 - Token-aware chunking: embedding tokenizer'ının 128 token sınırına uygun, cümle odaklı 110/20 parçalama sağlar.
 - Context hazırlama: relevance seçimini belge okuma sırasından ayırır ve üretken cevaplarda skorlu komşu parçaları en fazla 5 context parçasına kadar ekler.
 
-### Sonraki CLI adımları
+### Sonraki adımlar
 
-Web/API şu an proje hedefinde değildir. Sıradaki geliştirmeler saf CLI deneyimi
-ve retrieval kalitesi üzerinde ilerleyecektir.
+Web/API şu an proje hedefinde değildir. Sıradaki geliştirmeler retrieval
+kalitesi ve bu kaliteyi ölçebilme yeteneği üzerinde ilerleyecektir.
 
-### Bekleyen fikirler
+Sıralamanın mantığı şudur: **0–2 ölçme yeteneği kazandırır, 3–5 ise ancak o
+yetenek varsa öğretici olur.** Hybrid search ve reranking'in iddiası "retrieval
+kalitesini artırmak"tır; iyi bir eval olmadan bu iddia doğrulanamaz ve yapılan
+değişikliğin işe yarayıp yaramadığı körlemesine tahmin edilir.
 
-- Değişen dosya odaklı incremental reindex ve dosya bazlı ilerleme
-- SQLite FTS5/BM25 ile dense retrieval'ı birleştiren hybrid search
-- Daha geniş aday havuzu için reranking
-- OCR desteği
-- Conversation history
-- Daha büyük veri setleri için vector database
-- Otomatik model karşılaştırma raporu
+**0. Eval güçlendirmesi — tamamlandı**
+
+Recall@k ve MRR metrikleri, içerik imzasıyla etiketlenmiş ground truth, bozuk
+etiket tespiti, 6 hard negative vaka ve `eval_baseline.json` üzerinden
+`--compare` akışı eklendi. Ayrıntı için yukarıdaki `eval.py` ve
+`app/eval_metrics.py` bölümleri.
+
+İlk ölçümün iki önemli çıktısı oldu:
+
+1. `Recall@1 = 0.6667` — doğru chunk üç vakada 1. sırada değil. Eski eval bunu
+   göremiyor, `11/11 PASS` diyordu.
+2. Hard negative skorları alakalı soru skorlarıyla iç içe geçiyor. Bu bulgu
+   aşağıdaki 2. adımın kapsamını değiştirdi.
+
+**1. Chunking karşılaştırma deneyi**
+
+110/20 tokenizer sınırına göre seçildi ve gerekçesi sağlam, ama tek konfigürasyon
+denendi. Chunking, RAG'de sonucu en çok etkileyen tek değişkendir. Alternatifleri
+(farklı boyut/overlap, paragraf bazlı, sentence-window) aynı eval setinde ölçmek
+ucuzdur ve öğrenme/emek oranı yüksektir.
+
+**2. Yanlış pozitif savunması**
+
+Bu adım başlangıçta "eşiklerin veri temelli kalibrasyonu" olarak planlanmıştı.
+0. adımın ölçümü kapsamı değiştirdi.
+
+Kolay negatiflerle bakıldığında tablo temiz görünüyordu: alakalılar 0.55–0.87,
+alakasızlar 0.06–0.07. Hard negative eklendiğinde bu ayrım çöktü —
+`hard_negative_firewall_rules` 0.5985 alırken `rag_definition` 0.5570 alıyor.
+Skorlar iç içe geçtiği için **tek bir eşik değeri ikisini ayıramaz**.
+
+Eşik kalibrasyonu yine yapılmalıdır (özellikle `CONTEXT_SCORE_THRESHOLD` ve
+`EXTRACTIVE_SCORE_THRESHOLD` için), ama tek başına yeterli değildir. Yanlış
+pozitiflere karşı gereken ek sinyaller:
+
+- **Terim kanıtı:** sorunun ayırt edici terimleri seçilen context'te gerçekten
+  geçiyor mu? "Güvenlik duvarı" hiçbir chunk'ta geçmiyor.
+- **Groundedness:** üretilen cevap context'e dayanıyor mu, yoksa modelin genel
+  bilgisinden mi geliyor?
+
+Bu iki sinyal 3. adımdaki BM25 ile ve fırsat listesindeki groundedness kontrolü
+ile doğal olarak örtüşür; birlikte ele alınmaları verimli olur.
+
+**3. Hybrid search**
+
+SQLite FTS5/BM25 ile dense retrieval'ı birleştirmek. Dense retrieval eşanlamlıda
+güçlü, tam terim/kısaltma/sayıda zayıftır; BM25 tam tersidir.
+*Mimari karar: skor birleştirme stratejisi — RRF (sıralama birleştirme) mi,
+ağırlıklı normalizasyon mu.*
+
+**4. Reranking**
+
+Bi-encoder ile geniş aday havuzu çekip cross-encoder ile yeniden sıralamak.
+Cross-encoder soruyu ve chunk'ı birlikte değerlendirdiği için daha doğrudur ama
+önceden hesaplanamaz.
+*Mimari karar: aday sayısı ve kabul edilebilir latency bütçesi.*
+
+**5. Conversation history**
+
+Asıl iş takip sorusunu hatırlamak değil, **query rewriting**'dir. "Peki
+dezavantajları neler?" sorusunun embedding'i hiçbir şeye benzemez; retrieval'ın
+bağımsız (standalone) bir sorgu görmesi gerekir.
+*Mimari karar: rewriting tasarımı ve geçmiş bütçesi.*
+
+### Fırsat buldukça
+
+- **Cevap groundedness kontrolü.** `is_valid_answer()` şu an cevabın biçimini
+  denetliyor (uzunluk, tekrar, etiket), context'e sadakatini değil. Model
+  context'te olmayan bir şey uydurursa mevcut kontroller yakalamaz.
+- **Incremental reindex.** Ancak reindex süresi rahatsız edici hale geldiğinde.
+  Mevcut ölçekte (3 dosya, 24 chunk) çözülecek bir performans problemi yoktur ve
+  öğretici tarafının çoğu `app/index_state.py` içinde zaten yazılmıştır.
+- **Ölçekleme deneyi.** Chunk sayısını sentetik olarak artırıp brute force cosine
+  aramanın nerede kırıldığını ölçmek. Bu bir vector database migration'ı değil,
+  ANN/HNSW'nin neden var olduğunu ölçerek anlama denemesidir.
+- **OCR desteği.** Yalnızca gerçekten taranmış PDF ihtiyacı doğarsa; RAG öğrenimi
+  açısından katkısı yoktur, saf preprocessing işidir.
+
+### Kapsam dışı bırakılanlar
+
+- **Vector database'e geçiş.** Mevcut ve öngörülebilir ölçekte gereksizdir;
+  öğrenme değeri büyük ölçüde kütüphane kullanmayı öğrenmekten ibarettir.
+  Yerine yukarıdaki ölçekleme deneyi tercih edildi.
+- **Otomatik model karşılaştırma raporu.** `app/benchmark.py` bu ihtiyacı zaten
+  karşılıyor.
+- **Web arayüzü ve API sunucusu.** Proje hedefinde değildir.
+
+Kavram açıklamaları ve terim referansı için
+[`docs/LEARNING_NOTES.md`](docs/LEARNING_NOTES.md).
 
 ## 13. Projeye geri dönerken kısa kontrol listesi
 

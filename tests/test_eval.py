@@ -72,5 +72,38 @@ class RelevantCaseEvaluationTests(unittest.TestCase):
         self.assertIn("context_kavram=2/2", detail)
 
 
+class KnownGapStatusTests(unittest.TestCase):
+    def test_regular_failure_fails_the_gate(self):
+        status, gate_result = eval_module.resolve_status({}, False)
+
+        self.assertEqual(status, "FAIL")
+        self.assertFalse(gate_result)
+
+    def test_known_gap_failure_is_reported_but_not_gated(self):
+        status, gate_result = eval_module.resolve_status({"known_gap": True}, False)
+
+        self.assertEqual(status, "GAP")
+        self.assertIsNone(gate_result)
+
+    def test_known_gap_that_starts_passing_is_flagged(self):
+        status, gate_result = eval_module.resolve_status({"known_gap": True}, True)
+
+        self.assertEqual(status, "FIXED")
+        self.assertTrue(gate_result)
+
+    def test_regular_pass_counts_towards_gate(self):
+        status, gate_result = eval_module.resolve_status({}, True)
+
+        self.assertEqual(status, "PASS")
+        self.assertTrue(gate_result)
+
+
+class SignatureRankDescriptionTests(unittest.TestCase):
+    def test_missing_rank_is_shown_as_absent(self):
+        detail = eval_module.describe_signature_ranks([2, None])
+
+        self.assertEqual(detail, "sıra=2,yok")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -276,15 +276,37 @@ Embedding modeli daha once cache'e alinmissa eval agsiz calistirilabilir:
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python eval.py
 ```
 
+Retrieval metriklerini baseline ile karsilastirmak icin:
+
+```bash
+python eval.py --compare
+```
+
 Son dogrulanan durumda:
 
-- `153/153` birim testi basarili
-- `11/11` retrieval ve cevap kalite kontrolu basarili
+- `175/175` birim testi basarili
+- `14/14` retrieval ve cevap kalite kontrolu basarili
 - 3 kaynak dosya ve 24 chunk saglikli; maksimum chunk uzunlugu 109 token
+
+| Metrik | Deger |
+|---|---:|
+| Recall@1 | 0.6667 |
+| Recall@3 | 0.9444 |
+| Recall@5 | 1.0000 |
+| MRR | 0.8333 |
 
 Eval seti yalnizca dogru kaynak ve skoru degil, en iyi chunk veya modele giden
 sinirli context icindeki beklenen kavramlari ve kapsam disi sorularin LLM'e
-gonderilmeden reddedilmesini de kontrol eder.
+gonderilmeden reddedilmesini de kontrol eder. Ground truth chunk ID ile degil
+**icerik imzasi** ile etiketlenir; boylece reindex ve chunking degisiklikleri
+etiketleri gecersiz kilmaz.
+
+Ayrica 6 **hard negative** vaka bulunur: konusu dokumana yakin ama cevabi
+dokumanda olmayan sorular. Bunlarin tamami su anda mevcut esigi geciyor ve
+`GAP` olarak raporlanip olculuyor, ancak pass/fail kapisini dusurmuyor. Olcum
+onemli bir siniri gosterdi: cevabi dokumanda bulunmayan bir soru (0.5985),
+cevabi bulunan bir sorudan (0.5570) daha yuksek skor alabiliyor. Bu nedenle
+yanlis pozitif sorunu tek bir esik degeriyle cozulemez.
 
 ## Proje Yapisi
 
@@ -360,15 +382,30 @@ Daha ayrintili mimari anlatim ve ogrenme notlari icin
 CLI, indeks yonetimi, eval, model benchmark, kaynak denetimi, proje yolu,
 canli komut menusu, cerceveli giris, klavye kisayollari, streaming cevap,
 guvenli iptal, oturum export'u, token-aware chunking ve komsu context tamamlandi.
-Sonraki sistem odakli yonler:
 
-- Yalnizca degisen dokumanlari isleyen incremental reindex
-- Dosya bazli indeksleme ilerleme ve hata ozeti
-- Dense retrieval ile SQLite FTS5/BM25'i birlestiren hybrid search
-- Daha buyuk aday havuzu icin reranking
-- Takip sorulari icin kontrollu conversation history
-- OCR destegi
-- Daha buyuk koleksiyonlar icin vector database degerlendirmesi
+Sonraki adimlar retrieval kalitesi ve **bu kaliteyi olcebilme yetenegi**
+uzerinde ilerliyor. Siralamanin mantigi: ilk uc adim olcme yetenegi kazandirir,
+sonrakiler ancak o yetenek varsa dogrulanabilir olur.
+
+1. ~~**Eval guclendirmesi**~~ — **tamamlandi.** Recall@k ve MRR metrikleri,
+   icerik imzasiyla etiketlenmis ground truth, bozuk etiket tespiti, 6 hard
+   negative vaka ve `--compare` ile baseline karsilastirmasi.
+2. **Chunking karsilastirma deneyi** — mevcut 110/20 disindaki konfigurasyonlari
+   ayni eval setinde olcup secimi olcumle gerekcelendirme.
+3. **Yanlis pozitif savunmasi** — esik kalibrasyonu, terim kanidi ve
+   groundedness sinyali birlikte. Olcum tek basina esik ayarinin yetmedigini
+   gosterdi.
+4. **Hybrid search** — SQLite FTS5/BM25 ile dense retrieval'i birlestirme.
+5. **Reranking** — genis aday havuzunu cross-encoder ile yeniden siralama.
+   `Recall@5 = 1.0` dogru chunk'in her zaman aday havuzunda oldugunu, sorunun
+   siralama oldugunu gosteriyor.
+6. **Conversation history** — takip sorulari icin query rewriting.
+
+Firsat buldukca: cevap groundedness kontrolu, incremental reindex, brute force
+aramanin sinirini olcen olcekleme deneyi ve OCR destegi.
+
+Kavram aciklamalari ve terim referansi icin
+[`docs/LEARNING_NOTES.md`](docs/LEARNING_NOTES.md).
 
 ## Lisans
 
