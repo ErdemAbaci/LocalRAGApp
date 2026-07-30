@@ -179,6 +179,36 @@ class StreamingGenerationTests(unittest.TestCase):
             stream=True,
         )
 
+    def test_repetition_loop_stops_the_stream_early(self):
+        # Manuel testte model aynı cümleyi 20 kez üretti ve kontrol ancak
+        # generation bittikten sonra çalıştığı için 31.5 saniye sürdü. Sonuç
+        # yine fallback olacak; beklemenin tek etkisi kullanıcıya çöp göstermek.
+        sentence = "Çakışma ikinci parçada yazılıdır. "
+        chunks = [self.make_chunk(sentence) for _ in range(20)]
+        stream = MagicMock()
+        stream.__iter__.return_value = iter(chunks)
+        llm = self.make_llm(stream)
+
+        answer = llm.generate_answer_stream([])
+
+        self.assertLess(answer.count("yazılıdır"), 20)
+        self.assertFalse(is_valid_answer(answer))
+        stream.close.assert_called_once_with()
+
+    def test_normal_answer_is_not_cut_short(self):
+        stream = MagicMock()
+        stream.__iter__.return_value = iter([
+            self.make_chunk("Çakışan bölge dosya içinde işaretlenir "),
+            self.make_chunk("ve her iki tarafın içeriği yan yana gösterilir. "),
+            self.make_chunk("Çözüm sonrasında testlerin geçtiği doğrulanmalıdır."),
+        ])
+        llm = self.make_llm(stream)
+
+        answer = llm.generate_answer_stream([])
+
+        self.assertIn("doğrulanmalıdır", answer)
+        self.assertTrue(is_valid_answer(answer))
+
     def test_stream_is_closed_when_preview_callback_cancels(self):
         stream = MagicMock()
         stream.__iter__.return_value = iter([

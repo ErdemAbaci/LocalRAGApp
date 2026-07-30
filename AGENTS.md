@@ -258,6 +258,15 @@ Son doğrulanan durumda:
   reddettiğinde vaka PASS görünüyor, kullanıcı ise "Bu bilgi verilen
   dokümanlarda yok." cevabı alıyordu. `stub_vs_mock` tam olarak böyle geçti.
   Kontrol LLM yüklemeden yalnızca kapıyı çalıştırır.
+- **Tekrar döngüsü artık akış sırasında kesiliyor.** Manuel testte
+  "Çakışma nasıl çözülür?" sorusunda `phi-4-mini` aynı cümleyi yaklaşık 20 kez
+  üretti. Doğrulama bunu yakaladı ve `fallback_extractive`e düştü, yani sonuç
+  doğruydu; ama kontrol generation bittikten sonra çalıştığı için işlem
+  `31.5` saniye sürdü ve kullanıcı bu süre boyunca tekrarı canlı izledi.
+  `has_repeating_trigram()` akış döngüsünde çalışır ve üçüncü tekrarda akışı
+  keser. Erken kesmede yalnızca trigram kuralı kullanılır çünkü o **monotondur**;
+  kelime oranı kuralı metin uzadıkça yeniden altına düşebildiği için meşru bir
+  cevabı yarıda bırakabilirdi. Sonuç değişmez, süre değişir.
 - **Açık sorun: context kirlenmesi.** "Çok faktörlü doğrulama neden önemli?"
   sorusunda doğru chunk (216) hem cosine hem BM25'te açık ara birinci, ama
   `datamining.pdf`'ten üç parça da mutlak eşiği geçtiği için context'e girdi.

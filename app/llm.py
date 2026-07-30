@@ -32,6 +32,13 @@ def get_model_alias_source(environ=None):
 
 
 MODEL_ALIAS = get_model_alias()
+# Tekrar döngüsü sınırları. Ölçüm değil gözlem: manuel testte phi-4-mini aynı
+# cümleyi 20 kez üretti ve kontrol ancak generation bittikten sonra çalıştığı
+# için 31.5 saniye sürdü. Aynı üç kelimelik dizinin üçüncü tekrarı, meşru bir
+# Türkçe cevapta beklenmeyecek kadar erken bir işarettir.
+MIN_REPETITION_WORDS = 12
+REPEATED_TRIGRAM_LIMIT = 3
+
 FOUNDRY_START_ATTEMPTS = 100
 FOUNDRY_START_INTERVAL_SECONDS = 0.1
 FOUNDRY_STATUS_TIMEOUT_SECONDS = 15
@@ -147,10 +154,28 @@ def clean_streaming_preview(answer):
     return preview
 
 
+def has_repeating_trigram(answer, minimum=REPEATED_TRIGRAM_LIMIT):
+    """Aynı üç kelimelik dizinin tekrarı.
+
+    Bu kural **monotondur**: bir kez sağlandığında metin uzadıkça yanlışa
+    dönmez. Akış sırasında erken kesme için yalnızca bu kural kullanılır;
+    kelime oranı kuralı metin uzadıkça yeniden altına düşebildiği için erken
+    kesmede meşru bir cevabı yarıda bırakabilirdi.
+    """
+    words = re.findall(r"\b\w+\b", answer.casefold(), flags=re.UNICODE)
+
+    if len(words) < MIN_REPETITION_WORDS:
+        return False
+
+    trigram_counts = Counter(zip(words, words[1:], words[2:]))
+
+    return bool(trigram_counts and trigram_counts.most_common(1)[0][1] >= minimum)
+
+
 def has_excessive_repetition(answer):
     words = re.findall(r"\b\w+\b", answer.casefold(), flags=re.UNICODE)
 
-    if len(words) < 12:
+    if len(words) < MIN_REPETITION_WORDS:
         return False
 
     word_counts = Counter(words)
@@ -159,9 +184,7 @@ def has_excessive_repetition(answer):
     if most_common_count >= 8 and most_common_count / len(words) > 0.25:
         return True
 
-    trigrams = list(zip(words, words[1:], words[2:]))
-    trigram_counts = Counter(trigrams)
-    return bool(trigram_counts and trigram_counts.most_common(1)[0][1] >= 3)
+    return has_repeating_trigram(answer)
 
 
 def get_answer_validation_error(answer):
@@ -309,6 +332,13 @@ class LocalLLM:
                 if on_update is not None and preview and preview != last_preview:
                     on_update(preview)
                     last_preview = preview
+
+                # Tekrar döngüsünü akış sırasında kes. Doğrulama zaten bu cevabı
+                # reddedip kaynak metne düşecek; beklemek yalnızca kullanıcıya
+                # onlarca saniye boyunca çöp göstermek olur. Sonuç değişmez,
+                # süre değişir.
+                if has_repeating_trigram(preview):
+                    break
         finally:
             close = getattr(response, "close", None)
             if callable(close):
