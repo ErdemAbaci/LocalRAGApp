@@ -6,180 +6,389 @@ başına çalıştırılır.
 
 Cevaplamaya çalıştığı soru: "sorunun kelimeleri modele giden metinde gerçekten
 geçiyor mu" sinyali, cevabı dokümanda bulunan soruları bulunmayanlardan
-ayırabiliyor mu?
+ayırabiliyor mu? Ve Türkçe ekleri ele almanın hangi yöntemi bu ayrımı en iyi
+korur?
 
 Çalıştırma (repository kökünden):
 
     source .venv/bin/activate
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python tools/term_evidence_analysis.py
 
-Çıktı üç bölümdür: vaka başına kapsama tablosu, kelime bazında eşleşen/eksik
-detayı ve grup özeti.
+Ölçülen eşleştiriciler:
 
-2026-07 ölçümünün sonucu (17 eval sorusu, 24 chunk):
+- `substring` : soru kelimesi metnin herhangi bir yerinde geçiyor mu.
+- `whole`     : soru kelimesi metinde tam bir kelime olarak geçiyor mu.
+- `prefixN`   : soru kelimesi ile bir metin kelimesi, en az N karakterlik ortak
+                önek paylaşıp paylaşmadığına bakar ve kısa olanın uzun olanın
+                öneki olmasını şart koşar. Türkçe eklemeli olduğu için kök
+                baştadır; bu yüzden önek eşleştirmesi dilbilgisel olarak
+                anlamlıdır.
 
-- Tam eşleşmede alakalı sorular 0.71-1.00, hard negative'ler 0.00-0.33 aldı.
-  Aradaki boşluk nettir; cosine skorunda ise iki grup örtüşüyordu.
-- Kelimenin ilk 4-5 harfine bakan kaba kök alma sinyali BOZDU: hard negative
-  en yüksek değeri 0.75'e çıktı ve boşluk 0.38'den 0.05'e düştü. Sebep yanlış
-  eşleşmelerdir (`sayısı` -> `sayısal`, `yapılandırılmalıdır` -> `yapılır`).
-  Bu iş için kesinlik, kapsayıcılıktan önemlidir.
+Kritik ayrım: kelimeyi N karaktere kesip metnin içinde aramak (eski deneme)
+`sayısı` -> `sayısal` gibi yanlış eşleşmeler üretir. Tam kelime öneki şartı bunu
+üretmez, çünkü `sayısı` kelimesi `sayısal` kelimesinin öneki değildir.
+
+Çıktı, her eşleştirici için alakalı ve hard negative gruplarının aralığını ve
+aradaki boşluğu raporlar. Boşluk ne kadar büyükse eşik seçimi o kadar güvenlidir.
 
 Ayrıntı ve sonuçların yorumu için AGENTS.md bölüm 7.
 """
 
 import json
-import re
 from pathlib import Path
 
-from app.eval_metrics import normalize_text
-from app.rag_service import RAGService
-from app.retrieval import get_top_chunks
 from app.config import TOP_K
-
-
-# Soru kalıbı ve genel dilbilgisi kelimeleri. Bunlar her soruda geçtiği için
-# ayırt edici değildir; sinyale dahil edilirse hard negative'ler de yüksek
-# kapsama alır ve ölçüm anlamsızlaşır.
-# DİKKAT: bu liste normalize_text() çıktısıyla karşılaştırılır; normalize_text
-# Türkçe karakterleri korur (yalnızca İ/I eşlemesi yapar). Bu yüzden stopword'ler
-# de Türkçe karakterleriyle yazılmalıdır. ASCII yazmak listeyi sessizce etkisiz
-# bırakır.
-STOPWORDS = {
-    "ne", "nedir", "nasıl", "neden", "niçin", "hangi", "kaç", "kim", "nerede",
-    "nelerdir", "midir", "mi", "mu", "mü", "mı", "ve", "veya", "ile", "için",
-    "bir", "bu", "şu", "da", "de", "ki", "en", "çok", "az", "olan", "olarak",
-    "gibi", "sonra", "önce", "üzere", "göre", "kadar", "daha", "ise", "ama",
-    "fakat", "ancak", "yani", "eğer", "her", "hiç", "bazı", "tüm", "olmalıdır",
-    "olmalı", "kullanılır", "yapılır", "edilir", "edilmelidir", "seçilir",
-    "alınmalıdır", "yapılandırılmalıdır", "kullanılmalıdır", "önerir",
-    "izlenir", "var", "yok", "eder", "olur", "pişirilir",
-}
-
-WORD_PATTERN = re.compile(r"[0-9a-zçğıöşü\-]+")
+from app.database import get_all_chunks
+from app.rag_service import RAGService
+from app.sparse_search import inverse_document_frequency
+from app.retrieval import gate_score, get_top_chunks
+from app.term_evidence import (
+    common_prefix_length,
+    extract_question_terms,
+    normalize_text,
+    tokenize,
+)
 
 
 def content_words(question):
-    normalized = normalize_text(question)
-    tokens = WORD_PATTERN.findall(normalized)
+    """Uygulamanın gerçek terim çıkarımını kullanır.
 
-    return [
-        token
-        for token in tokens
-        if token not in STOPWORDS and len(token) >= 3
-    ]
+    Araç kendi stopword kopyasını tutmaz. Tutsaydı ölçüm, uygulamanın gerçekte
+    kullandığı listeden sapabilir ve eşik kararı yanlış veriye dayanırdı.
+    """
+    return extract_question_terms(question)
 
 
-def build_context_text(results):
+def match_substring(word, context_text, context_words):
+    return word in context_text
+
+
+def match_whole_word(word, context_text, context_words):
+    return word in context_words
+
+
+def make_prefix_matcher(min_prefix):
+    def match_prefix(word, context_text, context_words):
+        if word in context_words:
+            return True
+
+        for context_word in context_words:
+            shorter, longer = sorted((word, context_word), key=len)
+
+            if len(shorter) < min_prefix:
+                continue
+
+            if longer.startswith(shorter):
+                return True
+
+        return False
+
+    return match_prefix
+
+
+def make_common_prefix_matcher(min_prefix):
+    """Kelimelerden hiçbiri diğerinin öneki olmasa da ortak kökü arar.
+
+    `korunulur` ve `korunmak` aynı kökten türer ama hiçbiri diğerinin öneki
+    değildir; "kısa olan uzun olanın önekidir" kuralı bu meşru eşleşmeyi
+    kaçırır. Ortak önek kuralı yakalar.
+
+    Tam eşleşme her zaman önce denenir; aksi halde `rag` gibi minimum kökten
+    kısa kelimeler hiç eşleşemez.
+    """
+    def match_common_prefix(word, context_text, context_words):
+        if word in context_words:
+            return True
+
+        return any(
+            common_prefix_length(word, context_word) >= min_prefix
+            for context_word in context_words
+        )
+
+    return match_common_prefix
+
+
+def make_root_matcher(min_prefix, min_short):
+    """Ortak kök kuralına "kısa kelime tamamen tükendi" istisnasını ekler.
+
+    Ölçüm bir yanlış eksiklik gösterdi: `avından` kelimesi korpusta hiçbir şeyle
+    eşleşmiyordu, çünkü metindeki karşılığı `avı` yalnızca 3 karakter ve minimum
+    ortak kök 5. Oysa `avı`, `avından` kelimesinin tamamen tükenen bir önekidir;
+    bu Türkçe'de kökün tam olarak eşleştiği durumdur.
+
+    Kısa kelimeler için bu istisna gevşetme değil, kuralın asıl halidir: ortak
+    kök şartı uzun kelimelerde yanlış eşleşmeyi engellemek için var, kökün
+    kendisi kısa olduğunda ise şart kökü tamamen kapsamak olmalıdır.
+    """
+    def match_root(word, context_text, context_words):
+        if word in context_words:
+            return True
+
+        for context_word in context_words:
+            length = common_prefix_length(word, context_word)
+
+            if length >= min_prefix:
+                return True
+
+            shorter = min(len(word), len(context_word))
+
+            if shorter >= min_short and length == shorter:
+                return True
+
+        return False
+
+    return match_root
+
+
+MATCHERS = {
+    "prefix5": make_prefix_matcher(5),
+    "common4": make_common_prefix_matcher(4),
+    "common5": make_common_prefix_matcher(5),
+    "common6": make_common_prefix_matcher(6),
+    "common7": make_common_prefix_matcher(7),
+    "kök5-3": make_root_matcher(5, 3),
+    "kök5-4": make_root_matcher(5, 4),
+}
+
+# Uygulamanın kullandığı eşleştirici.
+APPLIED_MATCHER = "common5"
+
+
+def build_context(results):
     service = RAGService()
     matched = service.select_matched_context_chunks(results)
 
     if not matched:
-        return ""
+        return "", set()
 
     context_chunks = service.order_context_chunks(
         service.expand_context_chunks(matched),
         matched,
     )
-
-    return normalize_text("\n".join(
+    text = normalize_text("\n".join(
         chunk["chunk_text"] for chunk in context_chunks
     ))
 
+    return text, set(tokenize(text))
 
-def coverage(words, context, prefix_length=None):
+
+def coverage(words, matcher, context_text, context_words):
     if not words:
         return None, []
 
-    matched = []
-    for word in words:
-        needle = word if prefix_length is None else word[:prefix_length]
-        if needle and needle in context:
-            matched.append(word)
+    matched = [
+        word
+        for word in words
+        if matcher(word, context_text, context_words)
+    ]
 
     return len(matched) / len(words), matched
 
 
-def main():
-    cases = json.loads(
-        Path("eval_cases.json").read_text(encoding="utf-8")
-    )
+def classify(case):
+    if case["expectation"] == "relevant":
+        return "ALAKALI"
 
+    if case.get("difficulty") == "hard":
+        return "TUZAK"
+
+    return "kolay-neg"
+
+
+def corpus_documents():
+    """Korpustaki her chunk için token listesi. IDF'in denklemi budur."""
+    return [
+        (normalize_text(chunk["chunk_text"]), set(tokenize(chunk["chunk_text"])))
+        for chunk in get_all_chunks()
+    ]
+
+
+def matcher_term_weights(words, matcher, documents):
+    """Bir eşleştiriciye göre kelime -> IDF ağırlığı.
+
+    Ağırlık eşleştiriciden bağımsız değildir: `avından` kelimesinin korpusta
+    kaç dokümanda geçtiği, `avı` ile eşleşip eşleşmediğine bağlıdır. Bu yüzden
+    her eşleştirici kendi ağırlıklarıyla ölçülür; retrieval'ın hesapladığı
+    ağırlıkları kullanmak yalnızca uygulamadaki eşleştirici için doğru olurdu.
+
+    IDF formülü `app/sparse_search` içinden alınır; araç kendi kopyasını tutmaz.
+    """
+    weights = {}
+
+    for word in words:
+        matching = sum(
+            1
+            for document_text, document_words in documents
+            if matcher(word, document_text, document_words)
+        )
+        weights[word] = inverse_document_frequency(len(documents), matching)
+
+    return weights
+
+
+def weighted_coverage(words, matched, weights):
+    if not words:
+        return None
+
+    total = sum(weights.get(word, 1.0) for word in words)
+
+    if total <= 0:
+        return None
+
+    return sum(weights.get(word, 1.0) for word in matched) / total
+
+
+def collect_rows():
+    cases = json.loads(Path("eval_cases.json").read_text(encoding="utf-8"))
+    documents = corpus_documents()
     rows = []
 
     for case in cases:
-        question = case["question"]
-        results = get_top_chunks(question, top_k=TOP_K)
-        context = build_context_text(results)
-        words = content_words(question)
+        results = get_top_chunks(case["question"], top_k=TOP_K)
+        context_text, context_words = build_context(results)
+        words = content_words(case["question"])
 
-        exact_ratio, exact_matched = coverage(words, context)
-        prefix5_ratio, prefix5_matched = coverage(words, context, prefix_length=5)
-        prefix4_ratio, prefix4_matched = coverage(words, context, prefix_length=4)
-
-        if case["expectation"] == "relevant":
-            group = "ALAKALI"
-        elif case.get("difficulty") == "hard":
-            group = "TUZAK"
-        else:
-            group = "kolay-neg"
-
-        rows.append({
-            "group": group,
+        row = {
+            "group": classify(case),
             "name": case["name"],
-            "score": results[0]["score"] if results else 0.0,
+            "score": gate_score(results),
             "words": words,
-            "exact": exact_ratio,
-            "exact_matched": exact_matched,
-            "prefix5": prefix5_ratio,
-            "prefix5_matched": prefix5_matched,
-            "prefix4": prefix4_ratio,
-        })
+            "ratios": {},
+            "weighted": {},
+            "matched": {},
+            "weights": {},
+        }
 
-    print(f"{'GRUP':<10} {'VAKA':<36} {'SKOR':>6} {'TAM':>6} {'ÖN5':>6} {'ÖN4':>6}")
-    print("-" * 76)
+        for matcher_name, matcher in MATCHERS.items():
+            ratio, matched = coverage(words, matcher, context_text, context_words)
+            weights = matcher_term_weights(words, matcher, documents)
+
+            row["ratios"][matcher_name] = ratio
+            row["matched"][matcher_name] = matched
+            row["weights"][matcher_name] = weights
+            row["weighted"][matcher_name] = weighted_coverage(words, matched, weights)
+
+        rows.append(row)
+
+    return rows
+
+
+def print_case_table(rows):
+    header = f"{'GRUP':<10} {'VAKA':<34}{'SKOR':>7}"
+    for name in MATCHERS:
+        header += f"{name:>8}"
+    print("ORAN (kelime sayısına göre kapsama)\n")
+    print(header)
+    print("-" * len(header))
 
     for row in sorted(rows, key=lambda item: (item["group"], -item["score"])):
-        def fmt(value):
-            return "-" if value is None else f"{value:.2f}"
+        line = f"{row['group']:<10} {row['name']:<34}{row['score']:>7.4f}"
+        for name in MATCHERS:
+            ratio = row["ratios"][name]
+            line += f"{'-' if ratio is None else f'{ratio:.2f}':>8}"
+        print(line)
 
-        print(
-            f"{row['group']:<10} {row['name']:<36} "
-            f"{row['score']:>6.4f} {fmt(row['exact']):>6} "
-            f"{fmt(row['prefix5']):>6} {fmt(row['prefix4']):>6}"
-        )
+    print("\n\nAĞIRLIKLI (IDF ile ayırt ediciliğe göre kapsama)\n")
+    print(header)
+    print("-" * len(header))
 
-    print("\n\nKELİME DETAYI (tam eşleşme)\n")
     for row in sorted(rows, key=lambda item: (item["group"], -item["score"])):
-        missing = [w for w in row["words"] if w not in row["exact_matched"]]
-        print(f"[{row['group']}] {row['name']}")
-        print(f"    kelimeler : {row['words']}")
-        print(f"    eşleşen   : {row['exact_matched']}")
-        print(f"    eksik     : {missing}")
-        prefix_gain = [
-            w for w in row["prefix5_matched"]
-            if w not in row["exact_matched"]
-        ]
-        if prefix_gain:
-            print(f"    ön5 ile kazanılan: {prefix_gain}")
-        print()
+        line = f"{row['group']:<10} {row['name']:<34}{row['score']:>7.4f}"
+        for name in MATCHERS:
+            ratio = row["weighted"][name]
+            line += f"{'-' if ratio is None else f'{ratio:.2f}':>8}"
+        print(line)
 
-    print("\nGRUP ÖZETİ\n")
-    for group in ["ALAKALI", "TUZAK", "kolay-neg"]:
-        group_rows = [r for r in rows if r["group"] == group]
-        if not group_rows:
+
+def group_range(rows, key, name):
+    relevant = [
+        row[key][name]
+        for row in rows
+        if row["group"] == "ALAKALI" and row[key][name] is not None
+    ]
+    traps = [
+        row[key][name]
+        for row in rows
+        if row["group"] == "TUZAK" and row[key][name] is not None
+    ]
+
+    if not relevant or not traps:
+        return None
+
+    return min(relevant), max(traps)
+
+
+def print_separation(rows):
+    print("\n\nAYRIM GÜCÜ (alakalı en düşük  vs  tuzak en yüksek)\n")
+    header = (
+        f"{'EŞLEŞTİRİCİ':<10}"
+        f"{'oran alk':>10}{'oran tzk':>10}{'BOŞLUK':>9}"
+        f"{'ağr alk':>10}{'ağr tzk':>10}{'BOŞLUK':>9}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    best = None
+
+    for name in MATCHERS:
+        plain = group_range(rows, "ratios", name)
+        weighted = group_range(rows, "weighted", name)
+
+        if plain is None or weighted is None:
             continue
 
-        for metric in ["exact", "prefix5", "prefix4"]:
-            values = [r[metric] for r in group_rows if r[metric] is not None]
-            if not values:
-                continue
-            print(
-                f"  {group:<10} {metric:<8} "
-                f"ort={sum(values)/len(values):.2f} "
-                f"min={min(values):.2f} max={max(values):.2f}"
-            )
+        plain_gap = plain[0] - plain[1]
+        weighted_gap = weighted[0] - weighted[1]
+
+        print(
+            f"{name:<10}{plain[0]:>10.2f}{plain[1]:>10.2f}{plain_gap:>9.2f}"
+            f"{weighted[0]:>10.2f}{weighted[1]:>10.2f}{weighted_gap:>9.2f}"
+        )
+
+        for label, gap, bounds in (
+            ("oran", plain_gap, plain),
+            ("ağırlıklı", weighted_gap, weighted),
+        ):
+            if gap > 0 and (best is None or gap > best[1]):
+                best = (f"{name} / {label}", gap, bounds)
+
+    if best is None:
+        print("\nHiçbir ayar iki grubu ayırmıyor.")
+        return
+
+    label, gap, bounds = best
+    print(
+        f"\nEn geniş boşluk: {label} ({gap:.2f}). "
+        f"Güvenli eşik aralığı {bounds[1]:.2f} ile {bounds[0]:.2f} arasıdır."
+    )
+
+
+def print_weight_detail(rows, matcher_name):
+    print(f"\n\nAĞIRLIK DETAYI ({matcher_name}; kelime: idf, * = eşleşti)\n")
+
+    for row in sorted(rows, key=lambda item: (item["group"], -item["score"])):
+        matched = set(row["matched"][matcher_name])
+        weights = row["weights"][matcher_name]
+        parts = [
+            f"{word}: {weights.get(word, 1.0):.2f}{'*' if word in matched else ''}"
+            for word in row["words"]
+        ]
+        ratio = row["ratios"][matcher_name]
+        weighted = row["weighted"][matcher_name]
+        print(f"[{row['group']}] {row['name']}")
+        print(
+            f"    oran={'-' if ratio is None else f'{ratio:.2f}'}  "
+            f"ağırlıklı={'-' if weighted is None else f'{weighted:.2f}'}"
+        )
+        print(f"    {', '.join(parts) or '(içerik kelimesi yok)'}")
         print()
+
+
+def main():
+    rows = collect_rows()
+    print_case_table(rows)
+    print_separation(rows)
+    print_weight_detail(rows, APPLIED_MATCHER)
 
 
 if __name__ == "__main__":

@@ -103,8 +103,9 @@ kendin ürettiğini varsayma.
 - **Türkçe metin karşılaştırmasında ham `casefold()` kullanma.**
   `"İ".casefold()` sonucu `"i"` değil `"i" + U+0307` olur ve `"I".casefold()`
   `"ı"` yerine `"i"` verir. Bu yüzden büyük harfli bir terim sessizce eşleşmez.
-  Metin karşılaştıran her yerde `app/eval_metrics.normalize_text()` kullan;
+  Metin karşılaştıran her yerde `app/term_evidence.normalize_text()` kullan;
   bu fonksiyon Türkçe eşlemeyi yapıp artakalan birleşen noktayı temizler.
+  `app/eval_metrics.py` aynı fonksiyonu oradan alır; ikinci bir kopya açma.
 
 - **Eval'de ground truth chunk ID ile etiketlenmez.** Chunk ID'leri her
   reindex'te değişir (`AUTOINCREMENT`) ve chunking ayarı değişince sınırlar da
@@ -118,6 +119,49 @@ kendin ürettiğini varsayma.
   raporlanır ve baseline'a yazılır ama pass/fail kapısını düşürmez. Amaç eval'i
   kalıcı kırmızıda tutmamaktır. Bir `known_gap` vakası geçmeye başlarsa çıktı
   `FIXED` der; o zaman bayrağı kaldır.
+
+- **Kelime kanıtı kapısı LLM'den önce çalışır ve iki işi birden yapar.**
+  `RAGService.has_term_evidence()` sorunun kelimeleri seçilen context'te
+  geçmiyorsa `no_evidence` döndürür ve model hiç yüklenmez. Bu kapı olmasaydı
+  `generate_with_fallback` içindeki `false_no_evidence` koruması modelin doğru
+  reddini ezerdi. Kapıyı kaldırır veya gevşetirsen o hata geri gelir; eval'deki
+  hard negative vakalar bunu yakalar.
+
+- **Türkçe kelime eşleştirmesi ortak kök temellidir, kesme temelli değildir.**
+  Kelimeyi sabit N karaktere kesip metinde aramak `sayısı` -> `sayısal` gibi
+  yanlış eşleşmeler üretir ve sinyali bozar (ölçüldü: boşluk 0.38'den 0.05'e
+  düştü). `terms_match()` üç kural uygular: tam eşleşme, `min_prefix`
+  uzunluğunda **ortak önek** (biri diğerinin öneki olmak zorunda değil, çünkü
+  `korunulur` ve `korunmak` aynı köktendir) ve kısa kökler için kökün tamamen
+  kapsanması (`avı` -> `avından`; bu kural olmadan üç karakterlik kökler
+  korpusta hiç eşleşmiyordu). Türkçe ünsüz yumuşaması (`süreç` -> `süreci`)
+  `common_prefix_length()` içinde ele alınır.
+
+- **Kelime kanıtı kapsaması IDF ağırlıklıdır ve ağırlıklar retrieval'dan gelir.**
+  `get_top_chunks()` her sonuca `question_term_weights` ekler; `RAGService`
+  bunu `has_term_evidence()`'a taşır. Bağlantı kopsa kapı sessizce eşit sayma
+  davranışına döner ve `hard_negative_firewall_rules` sızıntısı geri gelir.
+  Kapı yalnızca seçilen context'i görür, ayırt ediciliği ise ancak korpusun
+  tamamı söyleyebilir; bu yüzden ağırlığı üretebilecek tek katman retrieval'dır.
+
+- **Birleşik skor sıralamada kullanılır, kapıda kullanılmaz.** Hybrid search
+  sonuçları RRF skoruna göre sıralanır, ama `results[0]["score"]` artık en
+  yüksek cosine değil. Eşik karşılaştırmasında ve kullanıcıya gösterimde
+  `retrieval.gate_score()` kullan; listenin başından skor okumak
+  `SIMILARITY_THRESHOLD`, `CONTEXT_RELATIVE_SCORE_MARGIN` ve eval'deki hard
+  negative `max_score` kontrolünü sessizce kaydırır.
+
+- **`terms_match()` değişikliği BM25'i de değiştirir.** `app/sparse_search.py`
+  aynı eşleştiriciyi kullanır. Eşleştirmeyi gevşetmek sparse skorlara gürültü
+  ekler ve sıralama metriklerini düşürebilir (ölçüldü: kısa kök kuralı
+  `Recall@1`'i 0.85'ten 0.80'e indirdi). Eşleştiriciye dokunduysan hem
+  `tools/term_evidence_analysis.py` hem `tools/hybrid_search_analysis.py`
+  çalıştır; biri kapıyı, diğeri sıralamayı ölçer.
+
+- **`QUESTION_STOPWORDS` Türkçe karakterlerle yazılmalıdır.** Liste
+  `normalize_text()` çıktısıyla karşılaştırılır; ASCII yazılmış bir kelime
+  (`nasil`) hiç eşleşmez ve listeyi sessizce etkisiz bırakır.
+  `tests/test_term_evidence.py` bunu kontrol eder.
 
 - **`app/config.NO_EVIDENCE_ANSWER` tek kaynaktır.** "Bu bilgi verilen
   dokümanlarda yok." metnini prompt'a, servise veya teste elle yazma; sabiti

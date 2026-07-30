@@ -12,19 +12,10 @@ kısa sürede geçersiz olurdu.
 """
 
 
-# Python'un casefold'u Türkçe'yi doğru küçültmez: "İ".casefold() sonucu "i"
-# değil, "i" + U+0307 (birleşen nokta) olur ve "I".casefold() "ı" yerine "i"
-# verir. Bu yüzden büyük harfle yazılmış bir imza sessizce eşleşmezdi.
-# Türkçe eşlemeyi önce elle yapıp artakalan birleşen noktayı temizliyoruz.
-TURKISH_LOWER_MAP = str.maketrans({"İ": "i", "I": "ı"})
-COMBINING_DOT_ABOVE = "̇"
-
-
-def normalize_text(text):
-    lowered = str(text).translate(TURKISH_LOWER_MAP).casefold()
-    lowered = lowered.replace(COMBINING_DOT_ABOVE, "")
-
-    return " ".join(lowered.split())
+# Türkçe duyarlı normalizasyon `app/term_evidence.py` içinde tanımlıdır ve
+# oradan alınır. İki kopya tutulursa biri güncellenip diğeri unutulur; eval ile
+# uygulamanın metin karşılaştırması sessizce ayrışır.
+from app.term_evidence import normalize_text  # noqa: F401
 
 
 def chunk_matches_signature(chunk_text, signature):

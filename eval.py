@@ -15,7 +15,11 @@ from app.eval_metrics import (
 )
 from app.llm import is_valid_answer
 from app.rag_service import RAGService
-from app.retrieval import get_top_chunks
+from app.retrieval import gate_score, get_top_chunks
+
+
+class LLMShouldNotLoadError(AssertionError):
+    pass
 
 
 EVAL_CASES_PATH = Path(__file__).with_name("eval_cases.json")
@@ -176,11 +180,52 @@ def evaluate_relevant_case(case, results):
     return True, detail
 
 
+def evaluate_answer_mode(case):
+    """Kullanıcının gerçekte aldığı kararı doğrular.
+
+    Retrieval skoru tek başına yeterli değildir: konusu dokümana yakın ama
+    cevabı dokümanda olmayan sorular similarity eşiğini geçebiliyor. Asıl
+    soru, sistemin sonunda ne cevap verdiğidir. Bu kontrol gerçek retrieval
+    ile `RAGService`i çalıştırır ve LLM yüklenirse hata verir; kanıtsız bir
+    soruda model hiç çağrılmamalıdır.
+    """
+    expected_mode = case["expect_answer_mode"]
+
+    def guard_llm_factory():
+        raise LLMShouldNotLoadError(
+            "Kanıtsız soruda LLM yüklendi; kapı çalışmadı."
+        )
+
+    service = RAGService(llm_factory=guard_llm_factory)
+
+    try:
+        result = service.answer(case["question"])
+    except LLMShouldNotLoadError as error:
+        return False, str(error)
+
+    if result.mode != expected_mode:
+        return False, (
+            f"cevap modu={result.mode}, beklenen={expected_mode}"
+        )
+
+    return True, f"cevap modu={result.mode}, LLM çağrılmadı"
+
+
 def evaluate_not_found_case(case, results):
+    if "expect_answer_mode" in case:
+        passed, detail = evaluate_answer_mode(case)
+
+        if results:
+            detail += f", skor={gate_score(results):.4f}"
+
+        return passed, detail
+
     if not results:
         return True, "Sonuç yok; beklenen davranış."
 
-    best_score = results[0]["score"]
+    # Hybrid sıralamada results[0] en yüksek cosine olmayabilir; buradan okumak
+    # hard negative kapısını sessizce gevşetir.
+    best_score = gate_score(results)
     max_score = case.get("max_score", SIMILARITY_THRESHOLD)
 
     if best_score >= max_score:
@@ -220,7 +265,7 @@ def evaluate_case(case):
         detail += ", " + describe_signature_ranks(metrics["signature_ranks"])
 
     if expectation == "not_found" and results:
-        metrics = {"best_score": results[0]["score"]}
+        metrics = {"best_score": gate_score(results)}
 
     return passed, detail, metrics
 

@@ -29,13 +29,21 @@ from app.config import (
     CONTEXT_RELATIVE_SCORE_MARGIN,
     CONTEXT_SCORE_THRESHOLD,
     EXTRACTIVE_SCORE_THRESHOLD,
+    RRF_K,
+    TERM_EVIDENCE_MIN_SHORT_ROOT,
+    USE_HYBRID_SEARCH,
     MAX_CONTEXT_CHUNKS,
     MAX_EXTRACTIVE_CHARS,
     MIN_GENERATIVE_ANSWER_CHARS,
     NEIGHBOR_CHUNK_RADIUS,
+    RRF_K,
     SIMILARITY_THRESHOLD,
+    TERM_EVIDENCE_MIN_PREFIX,
+    TERM_EVIDENCE_MIN_SHORT_ROOT,
+    TERM_EVIDENCE_THRESHOLD,
     TOP_K,
     USE_EXTRACTIVE_FALLBACK,
+    USE_HYBRID_SEARCH,
 )
 from app.database import (
     DB_PATH,
@@ -341,6 +349,46 @@ def print_config_info():
                 "Modele gönderilecek eşleşme ve komşuların toplam üst sınırı",
             ),
             (
+                "USE_HYBRID_SEARCH",
+                "açık" if USE_HYBRID_SEARCH else "kapalı",
+                "Anlam benzerliğine kelime örtüşmesi sıralamasını ekler",
+            ),
+            (
+                "RRF_K",
+                RRF_K,
+                "İki sıralamayı birleştirirken sıra farklarının etkisini ayarlar",
+            ),
+            (
+                "TERM_EVIDENCE_THRESHOLD",
+                TERM_EVIDENCE_THRESHOLD,
+                "Soru kelimelerinin context'te bulunması gereken en düşük ağırlıklı oran",
+            ),
+            (
+                "TERM_EVIDENCE_MIN_PREFIX",
+                TERM_EVIDENCE_MIN_PREFIX,
+                "Türkçe ek eşleştirmesi için gereken en kısa ortak kök",
+            ),
+            (
+                "TERM_EVIDENCE_MIN_SHORT_ROOT",
+                TERM_EVIDENCE_MIN_SHORT_ROOT,
+                "Kısa köklerde tam kapsanma kuralının geçerli olduğu en kısa uzunluk",
+            ),
+            (
+                "USE_HYBRID_SEARCH",
+                "açık" if USE_HYBRID_SEARCH else "kapalı",
+                "Anlam araması yanında kelime aramasını (BM25) da çalıştırır",
+            ),
+            (
+                "RRF_K",
+                RRF_K,
+                "İki arama sıralamasını birleştirirken kullanılan yumuşatma sabiti",
+            ),
+            (
+                "TERM_EVIDENCE_MIN_SHORT_ROOT",
+                TERM_EVIDENCE_MIN_SHORT_ROOT,
+                "Kısa kökler için tamamen kapsanması gereken en kısa uzunluk",
+            ),
+            (
                 "EXTRACTIVE_SCORE_THRESHOLD",
                 EXTRACTIVE_SCORE_THRESHOLD,
                 "Doğrudan kaynak cevabı için minimum skor",
@@ -407,6 +455,7 @@ def print_stats():
             ("Similarity threshold", SIMILARITY_THRESHOLD),
             ("Context threshold", CONTEXT_SCORE_THRESHOLD),
             ("Context relative margin", CONTEXT_RELATIVE_SCORE_MARGIN),
+            ("Hybrid search", "açık" if USE_HYBRID_SEARCH else "kapalı"),
         ],
     )
 

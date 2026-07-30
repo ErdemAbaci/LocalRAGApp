@@ -290,10 +290,48 @@ Ayrımın önemi:
 birleştirilir?
 
 - **RRF (Reciprocal Rank Fusion):** skorları değil *sıralamaları* birleştirir.
-  Skor ölçekleri farklı olduğu için genelde daha sağlamdır.
+  Her liste için `1/(k + sıra)` hesaplanır ve toplanır. Skor ölçekleri farklı
+  olduğu için genelde daha sağlamdır.
 - **Ağırlıklı normalizasyon:** skorları aynı ölçeğe çekip toplar. Ayar gerektirir.
 
-Bu bir mimari karardır; yaparken gerekçeyi yazıya dök.
+### Bu projede ne yapıldı
+
+Hybrid search eklendi ve RRF seçildi. Gerekçe somut: cosine 0–1 arasında,
+BM25'in üst sınırı yok. İki ölçeği toplamak için normalizasyon gerekir ve
+normalizasyon aynı sorgunun aday havuzu içinde yapılmak zorunda olduğundan
+skorlar **sorgular arası karşılaştırılamaz** hale gelir. Bu, "skoru şu eşiğin
+altındaysa reddet" mantığını bozar. RRF bu kalibrasyon sorununu tamamen ortadan
+kaldırır.
+
+Bedeli: RRF skorun büyüklük bilgisini atar. 0.90 ile 0.89 arasındaki fark, 0.90
+ile 0.30 arasındaki farkla aynı sayılır. Bu yüzden ikinci bir karar verildi:
+**birleşik skor yalnızca sıralamada kullanılır**, eşik karşılaştırmalarında ve
+kullanıcıya gösterimde cosine skoru kalır.
+
+Ölçülen sonuç: `Recall@1` 0.64 -> 0.82, `MRR` 0.80 -> 0.91.
+
+RRF'in `k` sabiti sezgisel değil. İki listenin birden gördüğü chunk, her k
+değerinde tek listenin gördüğünün önüne geçer. k'nın belirlediği şey, bir listede
+tepe yapan chunk ile iki listede de ortalarda kalan chunk arasındaki tercihtir:
+küçük k tepeyi, büyük k istikrarı ödüllendirir. Bu korpusta 1 ile 60 arası bütün
+değerler aynı sonucu verdi, yani ölçüm bu parametreyi ayırt edemedi — o yüzden
+veriye uydurmak yerine gelenek olan 60 seçildi. Ölçemediğin bir parametreyi
+"optimize etmek" gürültüye uydurmaktır.
+
+### Öğretici yan etki: bir iyileştirme başka bir şeyi bozabilir
+
+Hybrid search, kelime kanıtı kapısının kör noktasını açığa çıkardı. İkisi de
+kelime örtüşmesine bakıyor; retrieval kelime örtüşmesinde güçlenince, kapı da
+aynı yanlış eşleşmeye kandı ve bir tuzak soru sızdı. Eval bunu yakaladı.
+
+Çözüm, kapsamayı **IDF ile ağırlıklandırmak** oldu: `güvenlik` gibi her chunk'ta
+geçen bir kelime neredeyse hiçbir şey kanıtlamaz, `duvarı` gibi hiç geçmeyen bir
+kelime ise sorunun cevaplanamadığının en güçlü işaretidir. Oran ikisini eşit
+sayıyordu.
+
+Alınacak ders: bileşenler birbirinden bağımsız değildir. Bir sinyali
+güçlendirmek, o sinyale güvenen başka bir mekanizmanın varsayımını bozabilir.
+Ölçüm olmadan bu sessizce geçer.
 
 ## 12. Bi-encoder vs Cross-encoder (reranking)
 
@@ -332,6 +370,9 @@ Recall@5 : 1.0000
 MRR      : 0.8333
 ```
 
+Güncel değerler (hybrid search sonrası, 11 etiketli vaka):
+`Recall@1 = 0.8182`, `Recall@3 = 0.9545`, `Recall@5 = 1.0000`, `MRR = 0.9091`.
+
 Bu tablo, eski eval'in neden yetersiz olduğunun kanıtıdır. Eski eval `11/11 PASS`
 diyordu çünkü yalnızca "doğru dosya geldi mi" diye soruyordu. Recall@1'in 0.6667
 olması, doğru chunk'ın üç vakada **1. sırada olmadığını** gösteriyor — eski eval
@@ -361,9 +402,42 @@ Sebebi kavramsaldır ve bölüm 3'teki cosine tanımından çıkar: cosine simil
 değil. "Güvenlik duvarı kuralları" sorusu siber güvenlik dokümanına konu olarak
 gerçekten benzer — model yanılmıyor, biz ondan yapamayacağı bir şey istiyoruz.
 
-Bu yüzden yanlış pozitif problemi eşik ayarıyla çözülemez. Gerekli sinyaller
-başka yerdedir: BM25 terim kanıtı (bölüm 11 — "güvenlik duvarı" hiçbir chunk'ta
-geçmiyor), cross-encoder (bölüm 12) ve cevap groundedness kontrolü.
+Bu yüzden yanlış pozitif problemi eşik ayarıyla çözülemez.
+
+### Çözüm: kelime kanıtı
+
+Eklenen savunma şu basit soruyu sorar: **sorunun kelimeleri, bulunan metinde
+gerçekten geçiyor mu?**
+
+- "Güvenlik duvarı" → hiçbir parçada geçmiyor → kanıt yok → model çalıştırılmaz
+- "RAG" → geçiyor → kanıt var → normal akış
+
+Bu sinyal cosine'dan bağımsızdır ve iki grubu net ayırır: alakalı sorular
+0.80-1.00, cevabı bulunmayanlar 0.00-0.33.
+
+Kapı LLM'den **önce** çalışır ve bir bonus getirir: sistem modele ancak gerçekten
+kanıt varken gidiyor. Böylece "model bilmiyorum dedi ama biz ona inanmadık"
+hatası da ortadan kalkıyor — çünkü artık modele sorulan her soruda kanıt var.
+
+### Türkçe'nin zorluğu
+
+Soruda "bağlantılar", metinde "bağlantı" yazıyor. Aynı kelime ama bilgisayar
+farklı görüyor. Türkçe eklemeli bir dil: kök başta, ekler sonda.
+
+Çözüm önek karşılaştırması: kısa kelime uzun kelimenin **başlangıcı** mı?
+`bağlantı` → `bağlantılar` ✓
+
+**Denenip elenen kısayol:** "kelimelerin ilk 5 harfini karşılaştır". Bu,
+`sayısı` ile `sayısal`'ı eşleştiriyor — biri "adet" biri "numerik" demek.
+Yanlış eşleşmeler iki grup arasındaki boşluğu 0.38'den 0.05'e düşürdü. Ders:
+**"kanıt yok" demek üzereyken emin olmak, çok şey yakalamaktan önemlidir.**
+
+**Bir de dilbilgisi tuzağı:** Türkçe'de sonu p/ç/t/k ile biten kelimeler ek
+alınca yumuşar — `süreç` → `süre**c**i` (süreçi değil), `kitap` → `kita**b**ı`.
+Buna *ünsüz yumuşaması* denir. Düz önek karşılaştırması bunu göremez çünkü son
+harf değişmiştir; ayrıca ele alınması gerekti.
+
+Kalan iş: cross-encoder (bölüm 12) ve cevap groundedness kontrolü.
 
 ## 14. Query rewriting (conversation history)
 

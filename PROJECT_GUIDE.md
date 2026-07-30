@@ -2,7 +2,7 @@
 
 Bu belge, projeye birkaç gün veya birkaç ay ara verdikten sonra geri döndüğümüzde "hangi dosya ne yapıyordu?", "sistem nasıl çalışıyordu?" ve "sırada ne vardı?" sorularına hızlıca cevap vermek için hazırlandı.
 
-Belgenin anlattığı durum: **26 Temmuz 2026**.
+Belgenin anlattığı durum: **27 Temmuz 2026**.
 
 ## 1. Projenin amacı
 
@@ -69,6 +69,7 @@ local-rag-assistant/
 │   ├── health.py
 │   ├── index_state.py
 │   ├── eval_metrics.py
+│   ├── term_evidence.py
 │   ├── ingest.py
 │   ├── llm.py
 │   ├── prompts.py
@@ -159,6 +160,74 @@ bu üretim geçerli sayılmaz. Servis, prompt context'indeki cümleleri soru
 terimleriyle karşılaştırır ve en çok örtüşen kaynak cümlelerine fallback yapar.
 Böylece en yüksek cosine skorlu chunk doğrudan cevabı içermese bile yanlış veya
 eksik bir kaynak metni gösterme riski azalır.
+
+### `app/term_evidence.py`
+
+Sorunun ayırt edici kelimelerinin, modele gidecek context'te gerçekten geçip
+geçmediğini ölçer. Bu, cosine similarity'den **bağımsız** ikinci bir sinyaldir.
+
+**Neden gerekli oldu?** Cosine similarity konu benzerliğini ölçer, sorunun
+cevabının metinde bulunup bulunmadığını değil. Ölçüm bunu somut gösterdi:
+cevabı dokümanda hiç bulunmayan "Güvenlik duvarı kuralları nasıl
+yapılandırılmalıdır?" sorusu `0.5985` alırken, cevabı bulunan "RAG nedir?"
+`0.5570` aldı. Skorlar iç içe geçtiği için tek bir similarity eşiği bu iki
+grubu ayıramaz. Kelime kanıtı ise ayırır: alakalı sorular `0.80-1.00`, cevabı
+bulunmayanlar `0.00-0.33` kapsama alır.
+
+**Türkçe ekler nasıl ele alınıyor?** Türkçe eklemeli bir dildir; kök baştadır.
+Eşleştirme **ortak kök** temellidir: iki kelime en az 5 karakterlik ortak önek
+paylaşıyorsa aynı kökten sayılır.
+
+Kural neden "kısa olan uzun olanın öneki" değil? Bu ilk denenen kuraldı ve
+gerçek kullanımda kırıldı: `korunulur` ile `korunmak` aynı kökten türer ama
+hiçbiri diğerinin öneki değildir. Bu yüzden "Kimlik avından nasıl korunulur?"
+sorusu, cevabı dokümanda olmasına rağmen reddediliyordu.
+
+Ek olarak **ünsüz yumuşaması** ele alınır. Türkçe'de sonu p/ç/t/k ile biten
+kelimeler ünlüyle başlayan ek aldığında son ünsüzleri yumuşar: `süreç` ->
+`süreci`, `kitap` -> `kitabı`. Harf harf karşılaştırma bu çifti eşdeğer saymazsa
+kök tam ortasında kopar.
+
+**Kısa kök kuralı.** Kök minimum ortak önekten kısa olduğunda şart, kökün
+**tamamen kapsanması**dır. Ölçüm bunu zorunlu kıldı: `avından` kelimesi korpusta
+hiçbir şeyle eşleşmiyordu, çünkü metindeki karşılığı `avı` yalnızca 3 karakter ve
+ortak önek şartı 5. Sonuç, "kelime dokümanda gerçekten yok" durumunun
+"eşleştirici kaçırdı" durumundan ayırt edilemez hale gelmesiydi.
+
+**Yöntemin bilinen sınırı.** Ortak kök kuralı `sayısı` ile `sayısal`ı da
+eşleştirir. İkisi de `sayı` kökünden gelir; anlam farkı türetme ekindedir ve saf
+morfoloji bunu ayıramaz. Kısa kök kuralı bu gevşekliği artırır (`küme` ile
+`kümeleme` artık eşleşir); ölçüm bu bedele rağmen ayrımın genişlediğini gösterdi.
+
+**Kapsama artık IDF ile ağırlıklıdır.** Oran bütün kelimeleri eşit sayıyordu ve
+bu somut bir sızıntı üretti: "Güvenlik duvarı kuralları nasıl
+yapılandırılmalıdır?" sorusunda `güvenlik` neredeyse her chunk'ta geçtiği için
+hiçbir şey kanıtlamıyor, `kuralları` alakasız bir chunk'taki "3-2-1 kuralı" ile
+eşleşiyor, ayırt edici olan `duvarı` ise dokümanlarda hiç yok. Eşit sayınca
+kapsama 0.67 çıkıp eşiği geçiyordu.
+
+Ağırlık, `app/sparse_search.corpus_term_weights()` ile korpusun tamamı üzerinden
+hesaplanan IDF'tir: az chunk'ta geçen kelime değerli, her chunk'ta geçen kelime
+değersiz, hiç geçmeyen kelime en ağırdır. Ölçülen ayrım boşluğu:
+
+| ayar | oran | ağırlıklı |
+| --- | --- | --- |
+| ortak kök 5 | 0.00 | 0.02 |
+| ortak kök 5 + kısa kök 3 | 0.05 | **0.21** |
+
+Ağırlık tek başına yetmedi (0.02); kısa kök kuralı eklenip yanlış eksiklikler
+ortadan kalkınca ağırlık asıl işini yaptı (0.21). Eşik bu yüzden 0.70 —
+güvenli aralığın (tuzak max 0.60, alakalı min 0.82) ortası. Eşiği tuzak
+maksimumuna **eşit** seçmek daha önce iki kez sızdırdı (0.50 ve 0.60), çünkü
+eşitlik geçer.
+
+`QUESTION_STOPWORDS`, soru kalıbı ve genel fiilleri eler (`nedir`, `nasıl`,
+`kullanılır`). Bunlar her soruda geçtiği için ayırt edici değildir; sinyale
+dahil edilirlerse cevabı bulunmayan sorular da yüksek kapsama alır. Liste
+`normalize_text()` çıktısıyla karşılaştırıldığı için Türkçe karakterlerle
+yazılmalıdır; ASCII yazmak listeyi sessizce etkisiz bırakır.
+
+Ölçüm aracı: `tools/term_evidence_analysis.py`.
 
 ### `app/project.py`
 
@@ -507,14 +576,15 @@ python eval.py --update-baseline  # güncel metrikleri baseline olarak kaydet
 Son doğrulanan sonuç:
 
 ```text
-14/14 test başarılı
-6 bilinen boşluk (GAP) raporlandı; pass/fail kapısına dahil değil.
+23/23 test başarılı
 
-Recall@1 : 0.6667
-Recall@3 : 0.9444
+Recall@1 : 0.8182
+Recall@3 : 0.9545
 Recall@5 : 1.0000
-MRR      : 0.8333
+MRR      : 0.9091
 ```
+
+Yalnızca dense (hybrid search kapalı) ölçüm: `0.6364 / 0.8636 / 1.0000 / 0.7955`.
 
 **Neden metrik gerekliydi?** Eski eval yalnızca `results[0]`'a bakıyor ve "doğru
 dosya geldi mi" diye soruyordu. `11/11 PASS` diyordu ama doğru chunk üç vakada
@@ -896,11 +966,11 @@ Son eval ve unit test çalışmasında:
 ```text
 24 chunk
 3 kaynak dosya
-14/14 eval testi başarılı (+6 bilinen boşluk, GAP)
-175/175 unit testi başarılı
+23/23 eval testi başarılı (bilinen boşluk kalmadı)
+237/237 unit testi başarılı
 
-Recall@1 = 0.6667   Recall@3 = 0.9444
-Recall@5 = 1.0000   MRR      = 0.8333
+Recall@1 = 0.8182   Recall@3 = 0.9545
+Recall@5 = 1.0000   MRR      = 0.9091
 ```
 
 Başarılı kontroller:
@@ -1017,12 +1087,27 @@ pozitiflere karşı gereken ek sinyaller:
 Bu iki sinyal 3. adımdaki BM25 ile ve fırsat listesindeki groundedness kontrolü
 ile doğal olarak örtüşür; birlikte ele alınmaları verimli olur.
 
-**3. Hybrid search**
+**3. Hybrid search — tamamlandı**
 
-SQLite FTS5/BM25 ile dense retrieval'ı birleştirmek. Dense retrieval eşanlamlıda
-güçlü, tam terim/kısaltma/sayıda zayıftır; BM25 tam tersidir.
-*Mimari karar: skor birleştirme stratejisi — RRF (sıralama birleştirme) mi,
-ağırlıklı normalizasyon mu.*
+`app/sparse_search.py` BM25 ile kelime örtüşmesini ölçer, `app/retrieval.py` iki
+sıralamayı RRF ile birleştirir. Verilen mimari karar: **birleşik skor yalnızca
+sıralamada kullanılır.** Kapı ve kullanıcıya gösterilen skor cosine kalır, çünkü
+aksi halde dört eşiğin tamamı yeni bir ölçeğe göre yeniden kalibre edilmek
+zorunda kalırdı; tek değişkeni izole tutmak ölçümü mümkün kıldı.
+
+Sonuç: `Recall@1` 0.64 -> 0.82, `MRR` 0.80 -> 0.91. Manuel testte bozuk cevaba
+yol açan "Kimlik avından nasıl korunulur?" sorusunda cevabı içeren chunk 4.
+sıradan 1. sıraya çıktı.
+
+SQLite FTS5 tercih edilmedi: `unicode61` tokenizer'ı Türkçe stemming yapmaz,
+`remove_diacritics` seçenekleri `ı/i` ve `ş/s` ayrımını bozar, ayrıca
+`normalize_text()`'ten sapabilecek ikinci bir normalizasyon yolu açardı.
+
+Öğretici yan etki: hybrid search kelime kanıtı kapısının kör noktasını açığa
+çıkardı. İki mekanizma da kelime örtüşmesine bakıyor, bu yüzden retrieval
+güçlenince kapı sızdırdı ve kapsamayı IDF ile ağırlıklandırmak zorunlu hale
+geldi. Bir iyileştirme başka bir bileşenin varsayımını bozabilir; eval bunu
+yakaladığı için sessiz bir gerileme olmadı.
 
 **4. Reranking**
 

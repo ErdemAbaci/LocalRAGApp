@@ -18,6 +18,9 @@ yapmaz; mevcut dokumanlardan ilgili parcalari bulup cevaba baglam saglar.
 - Esik alti komsulari disarida birakan sinirli onceki/sonraki context genisletme
 - Kanita gore `extractive`, `generative` ve `fallback_extractive` cevap modlari
 - Zayif kanitta LLM'i calistirmadan guvenli kapsam disi cevabi
+- Similarity'den bagimsiz kelime kanidi kontrolu: sorunun kelimeleri secilen
+  metinde gecmiyorsa model hic calistirilmaz. Turkce ek ve unsuz yumusamasi
+  (`surec` / `sureci`) dikkate alinir.
 - Kaynak dosya, PDF sayfasi, chunk kimligi ve benzerlik skoru gosterimi
 - Indeks guncelligi, sistem sagligi ve model cache kontrolleri
 - Guvenli dokuman ekleme/silme komutlari
@@ -41,10 +44,12 @@ flowchart LR
     Q["Kullanici sorusu"] --> E["Soru embeddingi"]
     D --> F["Cosine similarity ile ara"]
     E --> F
-    F --> G{"Kanit yeterli mi?"}
+    F --> G{"Skor yeterli mi?"}
     G -- "Hayir" --> H["Dokumanlarda yok cevabi"]
-    G -- "Guclu ve dogrudan" --> I["Extractive cevap"]
-    G -- "Sentez gerekli" --> J["Foundry Local LLM"]
+    G -- "Evet" --> N{"Soru kelimeleri metinde var mi?"}
+    N -- "Hayir" --> H
+    N -- "Guclu ve dogrudan" --> I["Extractive cevap"]
+    N -- "Sentez gerekli" --> J["Foundry Local LLM"]
     J --> K{"Cevap gecerli mi?"}
     K -- "Evet" --> L["Generative cevap"]
     K -- "Hayir" --> M["Kaynak metne fallback"]
@@ -64,6 +69,7 @@ Bu bilgi verilen dokümanlarda yok.
 | Embedding | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | Yerel LLM | Microsoft Foundry Local, varsayilan `phi-4-mini` |
 | Retrieval | scikit-learn L2 normalization ve NumPy normalized dot product |
+| Hybrid search | Elle yazilmis BM25 + Reciprocal Rank Fusion |
 | Veri deposu | SQLite, JSON olarak saklanan embeddingler |
 | PDF okuma | `pypdf` |
 | Terminal arayuzu | `rich`, `prompt-toolkit` |
@@ -284,16 +290,20 @@ python eval.py --compare
 
 Son dogrulanan durumda:
 
-- `175/175` birim testi basarili
-- `14/14` retrieval ve cevap kalite kontrolu basarili
+- `237/237` birim testi basarili
+- `23/23` retrieval, indeks ve cevap karari kontrolu basarili
 - 3 kaynak dosya ve 24 chunk saglikli; maksimum chunk uzunlugu 109 token
 
 | Metrik | Deger |
 |---|---:|
-| Recall@1 | 0.6667 |
-| Recall@3 | 0.9444 |
+| Recall@1 | 0.8182 |
+| Recall@3 | 0.9545 |
 | Recall@5 | 1.0000 |
-| MRR | 0.8333 |
+| MRR | 0.9091 |
+
+Yalnizca dense retrieval ile ayni set: `0.6364 / 0.8636 / 1.0000 / 0.7955`.
+Fark hybrid search'ten gelir; `Recall@5` hybrid'den once de `1.0` oldugu icin
+sorun dogru parcayi bulmak degil siralamakti.
 
 Eval seti yalnizca dogru kaynak ve skoru degil, en iyi chunk veya modele giden
 sinirli context icindeki beklenen kavramlari ve kapsam disi sorularin LLM'e
@@ -328,7 +338,9 @@ yanlis pozitif sorunu tek bir esik degeriyle cozulemez.
 |   |-- project.py         # --project ve LOCAL_RAG_HOME yol cozumu
 |   |-- rag_service.py     # Yapilandirilmis RAG sonuc ve karar akisi
 |   |-- session.py         # Oturum gecmisi, tekrar verisi ve guvenli export
-|   `-- retrieval.py       # Cosine similarity, filtreleme ve siralama
+|   |-- sparse_search.py   # BM25 skoru ve IDF terim agirliklari
+|   |-- term_evidence.py   # Turkce kelime kanidi ve normalizasyon
+|   `-- retrieval.py       # Cosine similarity, RRF fusion ve siralama
 |-- docs/                  # Indekslenecek kullanici dokumanlari
 |-- tests/                 # Deterministik birim ve entegrasyon testleri
 |-- benchmark_cases.json   # Model benchmark vakalari
@@ -395,10 +407,12 @@ sonrakiler ancak o yetenek varsa dogrulanabilir olur.
 3. **Yanlis pozitif savunmasi** — esik kalibrasyonu, terim kanidi ve
    groundedness sinyali birlikte. Olcum tek basina esik ayarinin yetmedigini
    gosterdi.
-4. **Hybrid search** — SQLite FTS5/BM25 ile dense retrieval'i birlestirme.
+4. ~~**Hybrid search**~~ — **tamamlandi.** Elle yazilmis BM25 ve RRF ile
+   siralama birlestirme. Birlesik skor yalnizca siralamada kullanilir; kapi
+   skoru cosine kalir. `Recall@1` 0.64 -> 0.82, `MRR` 0.80 -> 0.91.
 5. **Reranking** — genis aday havuzunu cross-encoder ile yeniden siralama.
-   `Recall@5 = 1.0` dogru chunk'in her zaman aday havuzunda oldugunu, sorunun
-   siralama oldugunu gosteriyor.
+   Hybrid sonrasi kalan bosluk: `Recall@1 = 0.82`, yani alti vakadan birinde
+   dogru parca halen en ustte degil.
 6. **Conversation history** — takip sorulari icin query rewriting.
 
 Firsat buldukca: cevap groundedness kontrolu, incremental reindex, brute force

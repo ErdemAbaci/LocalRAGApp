@@ -97,6 +97,20 @@
     ]
   },
   {
+    "name": "multi_factor_importance",
+    "question": "Çok faktörlü doğrulama neden önemli?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "iki veya daha fazla bağımsız kanıt",
+        "güvenlik anahtarı"
+      ]
+    ],
+    "note": "Manuel testte yanlış reddedildi; 'önemli' soru kalıbı kelimesi içerik kelimesi sayılıp en yüksek IDF ağırlığını alıyordu."
+  },
+  {
     "name": "backup_rule",
     "question": "Güvenli yedekleme için 3-2-1 kuralı ne önerir?",
     "expectation": "relevant",
@@ -140,69 +154,87 @@
     ]
   },
   {
+    "name": "phishing_protection",
+    "question": "Kimlik avından nasıl korunulur?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "gönderen adresi",
+        "gerçek hedef adres"
+      ]
+    ],
+    "note": "Manuel testte yanlış reddedildi; kelime kanıtı korunulur~korunmak eşleşmesini kaçırıyordu."
+  },
+  {
     "name": "out_of_scope_weather",
     "question": "Hava nasıl?",
     "expectation": "not_found",
-    "max_score": 0.2
+    "max_score": 0.2,
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "out_of_scope_cooking",
     "question": "Çikolatalı kek kaç derecede pişirilir?",
     "expectation": "not_found",
-    "max_score": 0.2
+    "max_score": 0.2,
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "hard_negative_backup_frequency",
     "question": "Yedekleme ne sıklıkla alınmalıdır?",
     "expectation": "not_found",
-    "max_score": 0.2,
     "difficulty": "hard",
     "note": "Dokümanda yedekleme anlatılıyor ama sıklık hiç belirtilmiyor.",
-    "known_gap": true
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "hard_negative_password_length",
     "question": "Parola en az kaç karakter uzunluğunda olmalıdır?",
     "expectation": "not_found",
-    "max_score": 0.2,
     "difficulty": "hard",
     "note": "Parola birçok chunkta geçiyor ama uzunluk kuralı yok.",
-    "known_gap": true
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "hard_negative_ransomware_tool",
     "question": "Fidye yazılımının şifrelediği dosyaları çözmek için hangi araç kullanılır?",
     "expectation": "not_found",
-    "max_score": 0.2,
     "difficulty": "hard",
     "note": "Fidye yazılımı yedekleme bağlamında geçiyor; şifre çözme aracı yok.",
-    "known_gap": true
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "hard_negative_kmeans_cluster_count",
     "question": "K-means algoritmasında küme sayısı nasıl seçilir?",
     "expectation": "not_found",
-    "max_score": 0.2,
     "difficulty": "hard",
     "note": "Kümeleme bir yöntem olarak anılıyor; k-means detayı yok.",
-    "known_gap": true
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "hard_negative_normalization_formula",
     "question": "Min-max normalizasyon formülü nedir?",
     "expectation": "not_found",
-    "max_score": 0.2,
     "difficulty": "hard",
     "note": "Normalleştirme aşama olarak geçiyor; formül verilmiyor.",
-    "known_gap": true
+    "expect_answer_mode": "no_evidence"
   },
   {
     "name": "hard_negative_firewall_rules",
     "question": "Güvenlik duvarı kuralları nasıl yapılandırılmalıdır?",
     "expectation": "not_found",
-    "max_score": 0.2,
     "difficulty": "hard",
     "note": "Siber güvenlik dokümanında güvenlik duvarı hiç geçmiyor.",
-    "known_gap": true
+    "expect_answer_mode": "no_evidence"
+  },
+  {
+    "name": "hard_negative_backup_frequency_lowercase",
+    "question": "yedekleme ne sıklıkla alınmalıdır",
+    "expectation": "not_found",
+    "expect_answer_mode": "no_evidence",
+    "difficulty": "hard",
+    "note": "Küçük harfli/noktalamasız biçim farklı context getiriyor ve kapsama tam eşiğe eşit çıkıyordu."
   }
 ]

@@ -61,7 +61,7 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 - `app/ingest.py`: TXT/PDF okuma, embedding tokenizer'ına göre 110/20 tokenlık cümle odaklı chunking, embedding hazırlama, doküman değişim koruması ve reindex akışı.
 - `app/embeddings.py`: Yerel Hugging Face snapshot'ını tercih eden embedding lazy-load/cache yönetimi.
 - `app/health.py`: `/doctor` için doküman, veritabanı, embedding ve Foundry/model cache sağlık kontrolleri.
-- `app/retrieval.py`: Soru embeddingi, normalize edilmiş cosine hesabı, geçersiz vektör kontrolü, relevance sıralaması ve gerçek skorlu komşu chunk adayları.
+- `app/retrieval.py`: Soru embeddingi, normalize edilmiş cosine hesabı, geçersiz vektör kontrolü, dense/sparse sıralamaların RRF ile birleştirilmesi, kapı skorunun sıralamadan ayrılması ve gerçek skorlu komşu chunk adayları.
 - `app/prompts.py`: Türkçe, yalnızca context'e dayalı RAG promptu.
 - `app/project.py`: `--project`, `LOCAL_RAG_HOME` ve varsayılan repository kökünden aktif docs/data/history/export yollarını çözer.
 - `app/rag_service.py`: Retrieval, relevance/context seçimi, belge sıralı prompt, sınırlı komşu genişletme, cevap modu, streaming callback'i, fallback ve süre kararlarını sunumdan bağımsız çalıştırıp `RAGResult` döndürür.
@@ -69,6 +69,9 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 - `app/session.py`: Başarılı RAG sonuçlarının oturum içi geçmişini, tekrar seçimini ve üzerine yazma korumalı Markdown/JSON export'unu yönetir.
 - `benchmark_cases.json`: Modellerin aynı context ve beklenen kavramlarla karşılaştırıldığı üretken cevap vakaları.
 - `eval.py`: İndeks sağlığı, imza doğrulaması, cevap kalite kararı, retrieval regression değerlendirmesi, Recall@k/MRR raporu ve `--compare`/`--update-baseline` baseline akışı.
+- `app/sparse_search.py`: BM25 ile kelime örtüşmesi skoru ve soru kelimelerinin IDF ayırt edicilik ağırlıkları. Tokenizasyon ve morfoloji `app/term_evidence.py`'den gelir; ikinci bir normalizasyon yolu açılmaz.
+- `app/term_evidence.py`: Soru kelimelerinin context'te bulunma oranı (IDF ağırlıklı); Türkçe normalizasyon, stopword listesi, ortak kök eşleştirmesi, kısa kök kuralı ve ünsüz yumuşaması. `normalize_text()` buranın tek kaynağıdır.
+- `tests/test_term_evidence.py`: Türkçe normalizasyon, stopword bütünlüğü, önek/yumuşama eşleştirmesi ve kapsama/kapı davranışı testleri.
 - `app/eval_metrics.py`: Retrieval metriklerinin saf hesabı; imza eşleştirme, Recall@k, MRR, baseline karşılaştırması ve Türkçe duyarlı metin normalizasyonu.
 - `eval_cases.json`: Deterministik retrieval test soruları, içerik imzaları ve hard negative vakaları.
 - `eval_baseline.json`: Son onaylanan Recall@k/MRR ve hard negative skorları; `--compare` bu dosyaya göre fark üretir.
@@ -83,7 +86,8 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 - `tests/test_embeddings.py`: Yerel embedding snapshot tercihi ve cache-miss fallback testleri.
 - `tests/test_entrypoint.py`: Paket metadata'sı, `local-rag` alt komutları, exit code ve ortak soru akışı testleri.
 - `tests/test_llm.py`: Parça etiketi temizliği, streaming/iptal bağlantı kapatma ve sessiz/debug Foundry servis başlangıcı testleri.
-- `tests/test_retrieval.py`: Normalize edilmiş cosine skorunun sıralama/sonlu değer ve belge sıralı komşu aday testleri.
+- `tests/test_retrieval.py`: Normalize edilmiş cosine skorunun sıralama/sonlu değer, RRF füzyonu, sıra numaralandırma, kapı skorunun sıralamadan bağımsızlığı ve belge sıralı komşu aday testleri.
+- `tests/test_sparse_search.py`: BM25 tf doygunluğu, IDF, Türkçe ek eşleştirmesi ve IDF ağırlık testleri.
 - `tests/test_rag_service.py`: Yapılandırılmış sonuç, relevance ile seçim, belge sıralı prompt, komşu sınırı/rolü, cevap modları, fallback, kaynak filtresi, streaming ve iptal callback'lerini test eder.
 - `tests/test_source_tools.py`: Parametreli kaynak filtresi, `/show`, `/filter` ve `ask --source` davranışlarını test eder.
 - `tests/test_project.py`: Proje yolu önceliğini ve runtime modüllerinin aynı docs/data köküne bağlanmasını test eder.
@@ -94,7 +98,8 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 - `INSTRUCTIONS.md`: İlk proje hedefleri; güncel gerçeklik için her zaman kodu ve bu dosyayı esas al.
 - `CLAUDE.md`: Claude Code için çalışma kuralları ve kodda gözden kaçan noktalar; proje bağlamı için bu dosyaya yönlendirir.
 - `docs/LEARNING_NOTES.md`: Projedeki RAG kavramlarının sıfırdan açıklaması ve ileriki kararlar için terim referansı. İndekslenmez.
-- `tools/term_evidence_analysis.py`: Keşif aracı; uygulamanın parçası değildir. Soru kelimelerinin modele giden context'te geçme oranını vaka ve grup bazında ölçer. Kelime kanıtı sinyalinin tasarımını beslemek için kullanılır.
+- `tools/term_evidence_analysis.py`: Keşif aracı; uygulamanın parçası değildir. Soru kelimelerinin modele giden context'te geçme oranını hem eşit sayarak hem IDF ağırlıklı olarak, birden çok eşleştiriciyle vaka ve grup bazında ölçer. Eşik ve eşleştirici kararlarını beslemek için kullanılır.
+- `tools/hybrid_search_analysis.py`: Keşif aracı; uygulamanın parçası değildir. Dense ve hybrid sıralamayı `RRF_K` adaylarıyla Recall@k/MRR üzerinden karşılaştırır ve sıra değişimlerini vaka bazında gösterir.
 - `docs/`: İndekslenecek kullanıcı dokümanları (`.txt` ve `.pdf`).
 - `data/`: Üretilen yerel SQLite verisi; Git'e eklenmez.
 
@@ -123,6 +128,16 @@ TOP_K = 3
 NEIGHBOR_CHUNK_RADIUS = 1
 MAX_CONTEXT_CHUNKS = 5
 
+USE_HYBRID_SEARCH = True
+BM25_K1 = 1.5
+BM25_B = 0.75
+RRF_K = 60
+
+TERM_EVIDENCE_THRESHOLD = 0.70
+TERM_EVIDENCE_MIN_PREFIX = 5
+TERM_EVIDENCE_MIN_SHORT_ROOT = 3
+TERM_EVIDENCE_MIN_TERM_LENGTH = 3
+
 USE_EXTRACTIVE_FALLBACK = True
 EXTRACTIVE_SCORE_THRESHOLD = 0.50
 MAX_EXTRACTIVE_CHARS = 500
@@ -139,16 +154,94 @@ Bu değerler mevcut küçük veri seti ve regression testlerine göre seçildi. 
 Son doğrulanan durumda:
 
 - 3 kaynak dosya ve 24 chunk bulunuyor. En uzun chunk özel tokenlar dahil 109 tokendır; embedding modelinin 128 token sınırını aşan parça yoktur. `cybersecurity.txt` beş ayrı güvenlik konusu içeriyor.
-- Retrieval ve indeks değerlendirmesi `14/14` başarılı; ayrıca `6` bilinen boşluk (`GAP`) raporlanıyor.
-- Retrieval metrikleri: `Recall@1 = 0.6667`, `Recall@3 = 0.9444`, `Recall@5 = 1.0000`, `MRR = 0.8333` (9 etiketli vaka).
-  `Recall@5 = 1.0` doğru chunk'ın her zaman ilk 5 aday içinde olduğunu, sorunun bulma değil **sıralama** olduğunu gösterir; reranking'in etki alanı budur.
+- Retrieval, indeks ve cevap kararı değerlendirmesi `23/23` başarılı; bilinen boşluk (`GAP`) kalmadı.
+- Retrieval metrikleri: `Recall@1 = 0.8182`, `Recall@3 = 0.9545`, `Recall@5 = 1.0000`, `MRR = 0.9091` (11 etiketli vaka).
+  Bu değerler hybrid search sonrasıdır. Yalnızca dense ile ölçüm: `0.6364 / 0.8636 / 1.0000 / 0.7955`.
+  `Recall@5` hybrid'den önce de `1.0` idi; yani sorun doğru parçayı **bulmak** değil
+  **sıralamak**tı ve iyileşme tam olarak orada gerçekleşti.
 - Hard negative ölçümü kritik bir sınırı ortaya çıkardı: cevabı dokümanda hiç
   bulunmayan `hard_negative_firewall_rules` sorusu `0.5985` alırken, cevabı
   bulunan `rag_definition` `0.5570` alıyor. Yani **hiçbir tek `SIMILARITY_THRESHOLD`
   değeri bu ikisini ayıramaz.** Cosine similarity konu benzerliğini ölçer, cevap
   içerip içermediğini değil. Bu boşluğun çözümü eşik ayarı değil; BM25 terim
   kanıtı, cross-encoder ve groundedness kontrolüdür.
-- **Doğrulanmış hata: yanlış ret koruması tuzak sorularda ters çalışıyor.**
+- **Hybrid search eklendi ve sıralama sorununu ölçülebilir biçimde düzeltti.**
+  `app/sparse_search.py` BM25 ile kelime örtüşmesini ölçer; `app/retrieval.py`
+  dense ve sparse sıralamaları RRF (`1/(k + sıra)` toplamı) ile birleştirir.
+  Ölçülen sonuç: `Recall@1` 0.60 -> 0.80, `MRR` 0.775 -> 0.90. Manuel testte
+  bozuk cevaba yol açan "Kimlik avından nasıl korunulur?" sorusunda cevabı içeren
+  chunk `4.` sıradan `1.` sıraya çıktı. Sıra değişen üç vaka:
+  `phishing_protection` (4 -> 1), `data_transformation` (2 -> 1),
+  `data_mining_process` (2,5 -> 2,4).
+  Birleşik skor **yalnızca sıralama** için kullanılır. Kapı ve kullanıcıya
+  gösterilen skor cosine kalır; `retrieval.gate_score()` bunu sıralamadan
+  bağımsız olarak en yüksek cosine değerinden okur. Aksi halde dört eşiğin
+  tamamı, hard negative `max_score` kontrolü ve gösterilen skor yeni bir ölçeğe
+  göre yeniden kalibre edilmek zorunda kalırdı.
+  `RRF_K` ölçüldü: 1 ile 60 arasındaki bütün değerler bu korpusta aynı sonucu
+  veriyor, çünkü kararı sıra farkları değil "iki sinyal de gördü mü" belirliyor.
+  Ayırt edilemeyen bir parametre veriye uydurulmadı; gelenek olan 60 seçildi.
+- **Hybrid search kelime kanıtı kapısının kör noktasını açığa çıkardı ve kapı
+  IDF ağırlıklarına geçirildi.** İki mekanizma da kelime örtüşmesine bakıyor;
+  retrieval güçlenince kapı sızdırdı. `hard_negative_firewall_rules` sorusunda
+  hybrid, yedekleme chunk'ını öne çekti ve o chunk'taki "3-2-1 kuralı" ifadesi
+  sorunun `kuralları` kelimesiyle eşleşti; kapsama `0.33`'ten `0.67`'ye çıkıp
+  eşiği geçti. Ayırt edici kelime olan `duvarı` dokümanlarda hiç yok, ama oran
+  bütün kelimeleri eşit sayıyordu.
+  Ölçüm sırasında ikinci ve daha temel bir hata bulundu: `avından` kelimesi
+  korpusta hiçbir şeyle eşleşmiyordu, çünkü metindeki karşılığı `avı` yalnızca
+  3 karakter ve ortak kök şartı 5. Yani "kelime gerçekten yok" ile "eşleştirici
+  kaçırdı" aynı görünüyordu ve ağırlık tek başına yalnızca `0.02` boşluk verdi.
+  `terms_match()`'e kısa kök kuralı eklendi (kök `min_short` karakterden uzunsa
+  tamamen kapsanması yeterli). Ağırlıklı kapsamada ayrım boşluğu `0.02` -> `0.21`
+  oldu; eşik `0.60` -> `0.70` olarak aralığın ortasına alındı.
+  Bedeli: kısa kök kuralı BM25'i de gevşetti, bu yüzden hybrid'in `Recall@1`
+  katkısı 0.85'ten 0.80'e indi. Kapı doğruluğu sıralama doğruluğuna tercih
+  edildi; yanlış cevap üretmek, doğru cevabı 2. sıraya düşürmekten kötüdür.
+- **Soru kalıbı kelimeleri IDF ile birlikte yeni bir yanlış ret ürettti.**
+  Manuel testte "Çok faktörlü doğrulama neden önemli?" reddedildi. `önemli`
+  dokümanlarda hiç geçmediği için en yüksek ağırlıklardan birini (`2.30`)
+  alıyor ve kapsamayı `0.579`'a çekiyordu. Oysa bir şeyin önemini soran cevabın
+  metinde "önemli" kelimesini içermesi gerekmez; bu bir içerik kelimesi değil
+  soru kalıbıdır. `önemli`, `önemlidir`, `gerekli`, `gereklidir`
+  `QUESTION_STOPWORDS`'e eklendi ve vaka (`multi_factor_importance`) eval'e
+  girdi. Ayrım boşluğu 20 vakayla yeniden ölçüldü ve `0.21`'de kaldı; yani
+  stopword eklemek kapıyı zayıflatmadı.
+  Genel kural: IDF "nadir kelime = ayırt edici" varsayar. Bu varsayım soru
+  kalıbı kelimeleri için geçersizdir, çünkü onlar soruda bulunup dokümanda
+  bulunmamayı zaten doğal olarak yapar. Stopword listesi bu yüzden IDF'in
+  yerine geçmez, ön koşuludur.
+- **Açık sorun: `RRF_K = 60` tepe sinyali cezalandırıyor.** Manuel testte
+  "Yedekleme neden gereklidir?" sorusunda BM25 doğru chunk'ı (218, "Güvenli
+  Yedekleme") `1.` sıraya koydu, ama füzyon 220'yi (olay müdahalesi) seçti:
+  220 iki listede de ortalarda (dense 2., sparse 3.), 218 ise yalnızca birinde
+  tepe (dense 5., sparse 1.). Büyük `k` istikrarı, küçük `k` tepeyi ödüllendirir;
+  `k=1` olsaydı 218 kazanırdı. Tek vakayla sabit değiştirilmedi. Vaka eval setine
+  eklenip `tools/hybrid_search_analysis.py` taraması tekrarlanmalı.
+  Not: dense skorun bu soruda `0.1972` kalması ayrı bir zayıflıktır; embedding
+  modeli birebir konu eşleşmesini bile yakalayamadı.
+- **Açık sorun: context kirlenmesi.** "Çok faktörlü doğrulama neden önemli?"
+  sorusunda doğru chunk (216) hem cosine hem BM25'te açık ara birinci, ama
+  `datamining.pdf`'ten üç parça da mutlak eşiği geçtiği için context'e girdi.
+  Model karışık metinden bozuk cevap üretti, `get_answer_validation_error`
+  yakaladı ve `fallback_extractive`e düşüldü. Koruma çalıştı ama context seçimi
+  hâlâ yalnızca cosine eşiğine bakıyor; füzyon sırası veya sparse kanıt şartı
+  değerlendirilmeli.
+- **Kelime kanıtı kapısı eklendi ve yukarıdaki hatayı kapattı.**
+  `app/term_evidence.py`, sorunun ayırt edici kelimelerinin seçilen context'te
+  geçme oranını hesaplar; `RAGService.has_term_evidence()` bunu LLM çağrısından
+  **önce** uygular. Kanıt yoksa cevap `no_evidence` olur ve model hiç yüklenmez.
+  Kapı hem extractive hem generative yolu kapsar.
+  Tek kapı iki sorunu birden çözüyor: kanıtsız soruya uydurma cevap üretilmiyor
+  ve LLM'e ancak gerçekten kanıt varken gidildiği için `false_no_evidence`
+  koruması artık modelin doğru reddini ezmiyor.
+  Eval sonucu: 6 hard negative vakanın 6'sı da `no_evidence` veriyor, hiçbirinde
+  LLM yüklenmiyor. Recall@k ve MRR değişmedi; 9 alakalı vaka aynen çalışıyor.
+- Türkçe ünsüz yumuşaması `soften_final_consonant()` ile ele alınır
+  (`süreç` -> `süreci`, `kitap` -> `kitabı`). Bu olmadan meşru eşleşmeler
+  kaçıyordu; düz önek karşılaştırması son harfin değiştiğini göremez.
+- **Aşağıdaki hata artık düzeltilmiştir; kayıt olarak tutuluyor.**
+  Doğrulanmış hata: yanlış ret koruması tuzak sorularda ters çalışıyordu.
   `app/llm.get_answer_validation_error()` LLM tam olarak `NO_EVIDENCE_ANSWER`
   ürettiğinde bunu `false_no_evidence` sayıp geçersiz kılıyor ve
   `rag_service.generate_with_fallback()` kaynak metnine dönüyor. Bu koruma
@@ -158,9 +251,10 @@ Son doğrulanan durumda:
   "Bu bilgi verilen dokümanlarda yok." dedi, sistem bu **doğru** cevabı silip
   alakasız bir yedekleme cümlesi gösterdi. Uyarı metni
   "LLM bulunan kanıtı kullanmadı" ile bu yol tanınabilir.
-- Manuel LLM testi (6 hard negative, `phi-4-mini`): 5 soruda üretken cevap
-  üretildi, 1 soruda yukarıdaki yanlış ret koruması devreye girdi. Hiçbirinde
-  kullanıcıya kapsam dışı cevabı gösterilmedi.
+- Kelime kanıtı kapısı eklenmeden önceki manuel LLM testi (6 hard negative,
+  `phi-4-mini`): 5 soruda üretken cevap üretildi, 1 soruda yanlış ret koruması
+  devreye girdi. Hiçbirinde kullanıcıya kapsam dışı cevabı gösterilmiyordu.
+  Kapı eklendikten sonra altısı da LLM'e hiç gitmiyor.
 - Retrieval bazı hard negative'lerde tamamen alakasız context seçiyor:
   "Parola en az kaç karakter olmalıdır?" sorusunun en iyi eşleşmesi, kategorik
   verilerin 0/1'e dönüştürülmesini anlatan `datamining.pdf` chunk'ı.
@@ -179,7 +273,7 @@ Son doğrulanan durumda:
   0.38'den 0.05'e düşüyor. Sebep yanlış eşleşmeler: `sayısı`→`sayısal`,
   `yapılandırılmalıdır`→`yapılır`. Bu iş için kesinlik, kapsayıcılıktan
   önemlidir; Türkçe kök alma tasarımı bu kısıtla yapılmalıdır.
-- Unit testler `175/175` başarılı (token-aware chunking, göreli context seçimi, soru odaklı extractive fallback, komşu/context sırası, yanlış LLM ret fallback'i, context eval, RAG servis katmanı, streaming/iptal callback'leri, oturum geçmişi/export, kaynak filtreleme/görüntüleme, proje yolu, canlı slash menüsü, klavye kısayolları, terminal durum satırı/renklendirme/ipucu, giriş geçmişi/tamamlama, benchmark, retrieval, atomik reindex/manifest, güvenli TXT/PDF yönetimi ve LLM cevap temizliği).
+- Unit testler `205/205` başarılı (token-aware chunking, göreli context seçimi, soru odaklı extractive fallback, komşu/context sırası, yanlış LLM ret fallback'i, context eval, RAG servis katmanı, streaming/iptal callback'leri, oturum geçmişi/export, kaynak filtreleme/görüntüleme, proje yolu, canlı slash menüsü, klavye kısayolları, terminal durum satırı/renklendirme/ipucu, giriş geçmişi/tamamlama, benchmark, retrieval, atomik reindex/manifest, güvenli TXT/PDF yönetimi ve LLM cevap temizliği).
 - `/sources` indeksteki dosya, tür, sayfa ve chunk sayılarını gösterir; boş indeks, eksik `chunks` tablosu ve eski şema senaryolarında çökmez.
 - `/doctor` dokümanları, indeks güncelliğini, veritabanını, 384 boyutlu embeddingleri, Foundry kurulumunu ve `phi-4-mini` cache dosyalarını model yüklemeden kontrol eder.
 - CLI hataları kullanıcı mesajı ve çözüm önerisi gösterir; teknik exception yalnızca debug modunda görünür.
@@ -393,17 +487,34 @@ Sıradaki hedefleri şu sırayla ele al:
 1. **Chunking karşılaştırma deneyi.** 110/20 dışındaki konfigürasyonları aynı
    eval setinde ölç; seçimi ölçümle gerekçelendir. Artık `--compare` ile
    Recall@k/MRR farkı doğrudan görülebilir.
-2. **Yanlış pozitif savunması.** Başlangıçta "eşiklerin veri temelli
-   kalibrasyonu" olarak planlanmıştı; 0. adımın ölçümü kapsamı değiştirdi.
-   Hard negative skorları alakalı soru skorlarıyla **iç içe geçiyor**, bu yüzden
-   tek bir eşik değeri ikisini ayıramaz. Eşik kalibrasyonu yine yapılmalı ama
-   tek başına yeterli değil; terim kanıtı (soru terimleri context'te gerçekten
-   geçiyor mu) ve groundedness sinyali birlikte değerlendirilmeli.
-3. **Hybrid search.** SQLite FTS5/BM25 ile dense retrieval'ı birleştir. Hard
-   negative bulgusu bunu güçlendiriyor: "güvenlik duvarı" hiçbir chunk'ta
-   geçmiyor, BM25 bunu anında görür.
-   *Mimari karar: skor birleştirme stratejisi (RRF vs ağırlıklı normalizasyon).*
-4. **Reranking.** Geniş aday havuzunu cross-encoder ile yeniden sırala.
+2. **Yanlış pozitif savunması — büyük kısmı tamamlandı.** Kelime kanıtı kapısı
+   eklendi; 6 hard negative vakanın 6'sı artık `no_evidence` alıyor ve LLM'e
+   gitmiyor. Kalan iki parça:
+   - **Groundedness kontrolü.** Kapı retrieval context'ine bakar, üretilen
+     cevabın o context'e sadık kalıp kalmadığına bakmaz. Kanıt varken model
+     yine de context dışına çıkabilir.
+   - **Eşiklerin yeniden kalibrasyonu.** `SIMILARITY_THRESHOLD`,
+     `CONTEXT_SCORE_THRESHOLD` ve `EXTRACTIVE_SCORE_THRESHOLD` hâlâ elle
+     seçilmiş değerler. Kelime kanıtı kapısı eklendikten sonra bu eşiklerin
+     hangi yükü taşıdığı değişti; yeniden ölçülmeli. Hybrid search bunu
+     etkilemedi, çünkü birleşik skor kapıda kullanılmıyor.
+   - **Kelime kanıtı eşiğinin kırılganlığı.** `TERM_EVIDENCE_THRESHOLD = 0.70`
+     20 vakayla ölçüldü ve boşluk `0.21`. Bu üçüncü kalibrasyon; ilk ikisi
+     (`0.50`, `0.60`) gerçek kullanımda sızdırdı. Set her büyüdüğünde yeniden
+     ölç; `tools/term_evidence_analysis.py` bunu tek komutla yapar.
+     Her kalibrasyonu tetikleyen şey ölçüm seti değil gerçek bir kullanıcı
+     sorusu oldu; bu, setin küçüklüğünün en somut kanıtıdır.
+3. **Hybrid search.** ~~Yapıldı.~~ `app/sparse_search.py` (BM25) +
+   `app/retrieval.py` (RRF). Karar: birleşik skor yalnızca sıralamada kullanılır,
+   kapı skoru cosine kalır. Sonuç: `Recall@1` 0.60 -> 0.80, `MRR` 0.775 -> 0.90.
+   Yan etkisi kelime kanıtı kapısını IDF ağırlıklarına taşımayı zorunlu kıldı;
+   ayrıntı bölüm 7'de. SQLite FTS5 tercih edilmedi: `unicode61` tokenizer'ı
+   Türkçe stemming yapmaz ve `remove_diacritics` seçenekleri `ı/i`, `ş/s`
+   ayrımını bozar; ayrıca `normalize_text()`'ten sapan ikinci bir normalizasyon
+   yolu açardı.
+4. **Reranking.** Geniş aday havuzunu cross-encoder ile yeniden sırala. Hybrid
+   sonrası kalan boşluk: `Recall@1 = 0.80`, yani beş vakadan birinde doğru parça
+   hâlâ en üstte değil.
    *Mimari karar: aday sayısı ve kabul edilebilir latency bütçesi.*
 5. **Conversation history.** Asıl iş takip sorusu değil, query rewriting; soruyu
    retrieval'a bağımsız (standalone) biçimde ver.

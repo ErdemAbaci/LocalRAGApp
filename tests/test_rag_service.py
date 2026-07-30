@@ -90,6 +90,156 @@ class RAGServiceTests(unittest.TestCase):
         self.assertEqual(result.timings.generation_seconds, 0.0)
         llm_factory.assert_not_called()
 
+    def test_high_score_without_term_evidence_is_rejected_before_llm(self):
+        # Konusu dokümana yakın ama cevabı dokümanda olmayan soru. Similarity
+        # eşiğini rahatça geçiyor; kelime kanıtı olmadığı için LLM'e hiç
+        # gitmemeli, yoksa model eldeki alakasız metinden cevap uydurur.
+        llm_factory = Mock()
+        service = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: [
+                make_chunk(
+                    score=0.60,
+                    text=(
+                        "Kategorik ifadeler 0 ve 1 şeklinde sayısal "
+                        "değerlere dönüştürülebilir."
+                    ),
+                ),
+            ],
+            llm_factory=llm_factory,
+        )
+
+        result = service.answer("Parola kaç karakter uzunluğunda olmalıdır?")
+
+        self.assertEqual(result.mode, "no_evidence")
+        self.assertEqual(result.answer, NO_EVIDENCE_ANSWER)
+        self.assertEqual(result.sources, ())
+        self.assertEqual(result.timings.generation_seconds, 0.0)
+        llm_factory.assert_not_called()
+
+    def test_term_evidence_gate_also_blocks_extractive_answers(self):
+        # Kanıtsız bir soru yüksek skorlu tek bir chunk yakalarsa extractive
+        # yoldan da geçmemeli; aksi halde alakasız metin doğrudan cevap olur.
+        service = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: [
+                make_chunk(
+                    score=0.90,
+                    text="Kategorik ifadeler sayısal değerlere dönüşür.",
+                ),
+            ],
+            llm_factory=Mock(),
+        )
+
+        result = service.answer("Parola kaç karakter uzunluğunda olmalıdır?")
+
+        self.assertEqual(result.mode, "no_evidence")
+
+    def test_term_evidence_present_allows_normal_flow(self):
+        service = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: [
+                make_chunk(
+                    score=0.90,
+                    text=(
+                        "Çok faktörlü kimlik doğrulama girişte iki bağımsız "
+                        "kanıt ister."
+                    ),
+                ),
+            ],
+            llm_factory=Mock(),
+        )
+
+        result = service.answer("Çok faktörlü kimlik doğrulama nedir?")
+
+        self.assertEqual(result.mode, "extractive")
+
+    def test_term_evidence_threshold_is_configurable(self):
+        chunks = [
+            make_chunk(
+                score=0.60,
+                text="Güvenlik olayı müdahalesi anlatılır.",
+            ),
+        ]
+        question = "Güvenlik duvarı kuralları nedir?"
+
+        strict = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: chunks,
+            llm_factory=Mock(),
+            term_evidence_threshold=0.50,
+        )
+        lenient = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: chunks,
+            llm_factory=Mock(),
+            term_evidence_threshold=0.30,
+        )
+
+        self.assertEqual(strict.answer(question).mode, "no_evidence")
+        self.assertNotEqual(lenient.answer(question).mode, "no_evidence")
+
+    def test_term_weights_from_retrieval_close_a_measured_leak(self):
+        # Ölçülen gerçek sızıntı: "güvenlik" neredeyse her chunk'ta geçtiği için
+        # hiçbir şey kanıtlamaz, "kuralları" alakasız bir chunk'taki "3-2-1
+        # kuralı" ile eşleşir, ayırt edici olan "duvarı" ise dokümanlarda hiç
+        # yok. Eşit sayınca kapsama eşiği geçiyordu.
+        chunks = [
+            make_chunk(
+                score=0.60,
+                text="Güvenli yedekleme için 3-2-1 kuralı önerilir.",
+            ),
+        ]
+        question = "Güvenlik duvarı kuralları nasıl olmalıdır?"
+        weights = {"güvenlik": 0.97, "duvarı": 3.91, "kuralları": 2.30}
+
+        # Eşik, ağırlıklandırmadan önceki kalibrasyona sabitlenir; böylece tek
+        # değişken ağırlık olur ve test eşik değişince anlamını kaybetmez.
+        service = RAGService(llm_factory=Mock(), term_evidence_threshold=0.60)
+
+        self.assertTrue(service.has_term_evidence(question, chunks))
+        self.assertFalse(service.has_term_evidence(question, chunks, weights))
+
+    def test_retrieval_supplied_weights_reach_the_gate(self):
+        # Ağırlıklar retrieval sonucundan okunur; bağlantı kopsa kapı sessizce
+        # eşit sayma davranışına döner ve sızıntı geri gelir.
+        chunk = make_chunk(
+            score=0.60,
+            text="Güvenli yedekleme için 3-2-1 kuralı önerilir.",
+        )
+        chunk["question_term_weights"] = {
+            "güvenlik": 0.97,
+            "duvarı": 3.91,
+            "kuralları": 2.30,
+        }
+        service = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: [chunk],
+            llm_factory=Mock(),
+        )
+
+        result = service.answer("Güvenlik duvarı kuralları nasıl olmalıdır?")
+
+        self.assertEqual(result.mode, "no_evidence")
+
+    def test_gate_score_ignores_hybrid_ordering(self):
+        # Hybrid sıralamada ilk eleman daha düşük cosine alabilir. Kapı skorunu
+        # listenin başından okumak eşiği sessizce kaydırır.
+        chunks = [
+            dict(
+                make_chunk(score=0.18, chunk_id=1, chunk_index=1),
+                dense_best_score=0.62,
+            ),
+            dict(
+                make_chunk(score=0.62, chunk_id=2, chunk_index=2),
+                dense_best_score=0.62,
+            ),
+        ]
+        service = RAGService(
+            retrieval_func=lambda *_args, **_kwargs: chunks,
+            llm_factory=Mock(),
+            similarity_threshold=0.20,
+        )
+
+        result = service.answer("RAG nedir?")
+
+        self.assertNotEqual(result.mode, "no_evidence")
+        self.assertAlmostEqual(result.best_score, 0.62)
+
     def test_extractive_result_is_structured_without_loading_llm(self):
         llm_factory = Mock()
         service = RAGService(
@@ -137,16 +287,21 @@ class RAGServiceTests(unittest.TestCase):
             def generate_answer(self, _messages):
                 raise RuntimeError("model baglantisi koptu")
 
-        chunks = [make_chunk(score=0.62, text="A" * 510), make_chunk(score=0.55)]
+        chunks = [
+            make_chunk(score=0.62, text="A" * 510, chunk_id=1, chunk_index=1),
+            make_chunk(score=0.55, chunk_id=2, chunk_index=2),
+        ]
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
             llm_factory=BrokenLLM,
         )
 
-        result = service.answer("RAG nasil calisir?")
+        result = service.answer("RAG nasıl çalışır?")
 
         self.assertEqual(result.mode, "fallback_extractive")
-        self.assertEqual(result.answer, "A" * 510)
+        # Fallback, soru terimleriyle en çok örtüşen cümleyi seçer; dolgu
+        # metnini değil soruyla ilgili cümleyi döndürmesi beklenir.
+        self.assertEqual(result.answer, "RAG, ilgili bilgiyi dokumanlardan bulur.")
         self.assertIn("kaynak metin", result.warning)
         self.assertIsInstance(result.warning_error, RuntimeError)
 
@@ -184,14 +339,17 @@ class RAGServiceTests(unittest.TestCase):
             def generate_answer(self, _messages):
                 return "Dokumanlara dayali yeterince uzun ve gecerli cevap."
 
-        chunks = [make_chunk(score=0.62, text="A" * 510), make_chunk(score=0.55)]
+        chunks = [
+            make_chunk(score=0.62, text="A" * 510, chunk_id=1, chunk_index=1),
+            make_chunk(score=0.55, chunk_id=2, chunk_index=2),
+        ]
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
             llm_factory=GoodLLM,
         )
 
         result = service.answer(
-            "RAG nasil calisir?",
+            "RAG nasıl çalışır?",
             activity_factory=record_activity,
             context_callback=lambda *args: context_calls.append(args),
         )
@@ -199,7 +357,7 @@ class RAGServiceTests(unittest.TestCase):
         self.assertEqual(result.mode, "generative")
         self.assertEqual(stages, ["retrieval", "model", "generation"])
         self.assertEqual(len(context_calls), 1)
-        self.assertEqual(context_calls[0][0], "RAG nasil calisir?")
+        self.assertEqual(context_calls[0][0], "RAG nasıl çalışır?")
 
     def test_prompt_context_is_ordered_by_document_after_relevance_selection(self):
         captured_messages = []
@@ -212,14 +370,14 @@ class RAGServiceTests(unittest.TestCase):
         chunks = [
             make_chunk(
                 score=0.72,
-                text="İkinci sayfadaki sonuç bölümü.",
+                text="İkinci sayfadaki sonuç bölümü süreci özetler.",
                 chunk_id=2,
                 page_number=2,
                 chunk_index=1,
             ),
             make_chunk(
                 score=0.61,
-                text="Birinci sayfadaki başlangıç bölümü.",
+                text="Birinci sayfadaki başlangıç bölümü süreci tanıtır.",
                 chunk_id=1,
                 page_number=1,
                 chunk_index=1,
@@ -253,7 +411,7 @@ class RAGServiceTests(unittest.TestCase):
         )
         matched = make_chunk(
             score=0.70,
-            text="Ana eşleşme. " + "A" * 510,
+            text="Ana süreç açıklaması. " + "A" * 510,
             chunk_id=11,
             page_number=1,
             chunk_index=2,
@@ -317,14 +475,17 @@ class RAGServiceTests(unittest.TestCase):
                 on_update("Tam ve dokümana dayalı geçerli cevap metni.")
                 return "Tam ve dokümana dayalı geçerli cevap metni."
 
-        chunks = [make_chunk(score=0.62, text="A" * 510), make_chunk(score=0.55)]
+        chunks = [
+            make_chunk(score=0.62, text="A" * 510, chunk_id=1, chunk_index=1),
+            make_chunk(score=0.55, chunk_id=2, chunk_index=2),
+        ]
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
             llm_factory=StreamingLLM,
         )
 
         result = service.answer(
-            "RAG nasil calisir?",
+            "RAG nasıl çalışır?",
             stream_callback=updates.append,
         )
 
@@ -340,7 +501,10 @@ class RAGServiceTests(unittest.TestCase):
                 on_update("Yarım cevap")
                 raise KeyboardInterrupt
 
-        chunks = [make_chunk(score=0.62, text="A" * 510), make_chunk(score=0.55)]
+        chunks = [
+            make_chunk(score=0.62, text="A" * 510, chunk_id=1, chunk_index=1),
+            make_chunk(score=0.55, chunk_id=2, chunk_index=2),
+        ]
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
             llm_factory=CancelledLLM,
@@ -348,7 +512,7 @@ class RAGServiceTests(unittest.TestCase):
 
         with self.assertRaises(KeyboardInterrupt):
             service.answer(
-                "RAG nasil calisir?",
+                "RAG nasıl çalışır?",
                 stream_callback=lambda _answer: None,
             )
 

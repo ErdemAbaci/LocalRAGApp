@@ -7,6 +7,71 @@ MAX_CONTEXT_CHUNKS = 5
 
 NO_EVIDENCE_ANSWER = "Bu bilgi verilen dokümanlarda yok."
 
+# Kelime kanıtı eşikleri. Değerler `tools/term_evidence_analysis.py` ölçümünden
+# gelir (20 eval sorusu, 24 chunk). Kapsama artık kelime sayısına göre değil
+# IDF ağırlığına göre hesaplanır; ölçülen ayrım boşlukları (alakalı min - tuzak
+# max, pozitif olan ayırıyor demektir):
+#
+#                       oran    ağırlıklı
+#   ortak kök 4        -0.08        -0.16
+#   ortak kök 5         0.00         0.02
+#   ortak kök 6        -0.17        -0.17
+#   kök 5 + kısa 3      0.05         0.21   <- seçilen
+#   kök 5 + kısa 4     -0.08        -0.13
+#
+# İki bulgu:
+#   - Ağırlık tek başına yetmedi. `common5 / ağırlıklı` boşluğu yalnızca 0.02
+#     çıktı, çünkü ayırt edici kelimenin eksik olması ile eşleştiricinin onu
+#     kaçırması aynı görünüyordu: "avından" korpusta hiç eşleşmediği için
+#     "duvarı" kadar eksik sayılıyordu, oysa "kimlik avı" dokümanda var.
+#   - Eşleştiriciye kısa kök kuralı eklenince ("avı", "avından"ın tükenen
+#     öneki) yanlış eksiklik ortadan kalktı ve ağırlık asıl işini yaptı:
+#     boşluk 0.21.
+#
+# Güvenli eşik aralığı: tuzak max 0.60, alakalı min 0.82. 0.70 seçildi; iki
+# yana 0.10'luk eşit pay bırakır. Eşiği tuzak maksimumuna EŞİT seçmek daha önce
+# iki kez sızdırdı (0.50 ve 0.60); eşitlik geçer, bu yüzden aralığın ortası.
+#
+# Eval seti büyüdükçe yeniden ölç; ölçmeden değiştirme.
+TERM_EVIDENCE_THRESHOLD = 0.70
+TERM_EVIDENCE_MIN_PREFIX = 5
+TERM_EVIDENCE_MIN_SHORT_ROOT = 3
+TERM_EVIDENCE_MIN_TERM_LENGTH = 3
+
+# Hybrid search. Dense (cosine) sıralaması tek başına yetersiz kaldı: ölçümde
+# Recall@1 = 0.60 iken Recall@5 = 1.00 çıktı, yani doğru parça aday havuzunda
+# var ama en üstte değil. Sparse (BM25) sinyali kelime örtüşmesini ölçer ve
+# cosine'in kaçırdığı birebir terim eşleşmesini yakalar. Ölçülen sonuç
+# (11 etiketli vaka): Recall@1 0.6364 -> 0.8182, MRR 0.7955 -> 0.9091.
+# "Kimlik avından nasıl korunulur?" sorusunda cevabı içeren chunk 4. sıradan
+# 1. sıraya çıktı.
+#
+# Birleşik skor YALNIZCA sıralama için kullanılır. Kapı ve kullanıcıya gösterilen
+# skor cosine olarak kalır; aksi halde SIMILARITY_THRESHOLD,
+# CONTEXT_SCORE_THRESHOLD, CONTEXT_RELATIVE_SCORE_MARGIN ve
+# EXTRACTIVE_SCORE_THRESHOLD'un tamamı yeni bir ölçeğe göre yeniden kalibre
+# edilmek zorunda kalırdı. Tek değişkeni izole tutmak ölçümü mümkün kılıyor.
+USE_HYBRID_SEARCH = True
+
+# BM25 doygunluk ve uzunluk normalizasyonu sabitleri. Bunlar literatür
+# geleneğidir (k1 genelde 1.2-2.0, b genelde 0.75), bizim setimizde ölçülmedi;
+# 24 chunk'lık bir korpus bu iki parametreyi ayırt edecek kadar büyük değil.
+# Korpus büyüdüğünde `tools/hybrid_search_analysis.py` ile ölç.
+BM25_K1 = 1.5
+BM25_B = 0.75
+
+# RRF sabiti. `tools/hybrid_search_analysis.py`, 10 etiketli vaka:
+#
+#   dense              R@1 0.6364  R@3 0.8636  MRR 0.7955
+#   hybrid k=1..60     R@1 0.8182  R@3 0.9545  MRR 0.9091
+#
+# k=1 ile k=60 arasındaki bütün değerler birebir aynı sonucu veriyor: 24 chunk'lık
+# korpusta sparse sinyalin gördüğü chunk sayısı azdır, bu yüzden kararı "iki
+# sinyal de gördü mü" belirliyor ve sıra farkları hiç devreye girmiyor. Ölçümde
+# ayırt edilemeyen bir parametreyi veriye uydurmak yerine literatür geleneği olan
+# 60 seçildi. Eval seti veya korpus büyüdüğünde yeniden ölç.
+RRF_K = 60
+
 USE_EXTRACTIVE_FALLBACK = True
 EXTRACTIVE_SCORE_THRESHOLD = 0.50
 MAX_EXTRACTIVE_CHARS = 500

@@ -13,12 +13,15 @@ from app.config import (
     NEIGHBOR_CHUNK_RADIUS,
     NO_EVIDENCE_ANSWER,
     SIMILARITY_THRESHOLD,
+    TERM_EVIDENCE_MIN_PREFIX,
+    TERM_EVIDENCE_THRESHOLD,
     TOP_K,
     USE_EXTRACTIVE_FALLBACK,
 )
 from app.llm import LocalLLM, get_answer_validation_error
 from app.prompts import build_rag_messages
-from app.retrieval import get_top_chunks
+from app.retrieval import gate_score, get_top_chunks
+from app.term_evidence import term_coverage
 
 
 class EmptyQuestionError(ValueError):
@@ -188,6 +191,8 @@ class RAGService:
         use_extractive_fallback=USE_EXTRACTIVE_FALLBACK,
         neighbor_chunk_radius=NEIGHBOR_CHUNK_RADIUS,
         max_context_chunks=MAX_CONTEXT_CHUNKS,
+        term_evidence_threshold=TERM_EVIDENCE_THRESHOLD,
+        term_evidence_min_prefix=TERM_EVIDENCE_MIN_PREFIX,
     ):
         self.retrieval_func = retrieval_func
         self.llm_factory = llm_factory
@@ -201,6 +206,8 @@ class RAGService:
         self.use_extractive_fallback = use_extractive_fallback
         self.neighbor_chunk_radius = neighbor_chunk_radius
         self.max_context_chunks = max_context_chunks
+        self.term_evidence_threshold = term_evidence_threshold
+        self.term_evidence_min_prefix = term_evidence_min_prefix
 
     def answer(
         self,
@@ -235,7 +242,10 @@ class RAGService:
         if not chunks:
             raise EmptyIndexError("Aranabilecek bir indeks bulunamadı.")
 
-        best_score = float(chunks[0]["score"])
+        # Hybrid search sıralamayı değiştirdiği için chunks[0] en yüksek cosine
+        # skoruna sahip chunk olmayabilir. Kapı skorunu sıralamadan okumak eşiği
+        # sessizce kaydırır.
+        best_score = gate_score(chunks)
 
         if best_score < self.similarity_threshold:
             return RAGResult(
@@ -268,6 +278,23 @@ class RAGService:
                 matched_context_chunks,
             )
             source_chunks = expanded_chunks
+
+        term_weights = chunks[0].get("question_term_weights")
+
+        if not self.has_term_evidence(clean_question, prompt_chunks, term_weights):
+            return RAGResult(
+                question=clean_question,
+                answer=NO_EVIDENCE_ANSWER,
+                mode="no_evidence",
+                best_score=best_score,
+                sources=(),
+                timings=RAGTimings(
+                    retrieval_seconds=retrieval_seconds,
+                    generation_seconds=0.0,
+                    total_seconds=self.clock() - total_start,
+                ),
+                source_filter=source_name,
+            )
 
         sources = tuple(RAGSource.from_chunk(chunk) for chunk in source_chunks)
         messages = tuple(build_rag_messages(clean_question, prompt_chunks))
@@ -319,6 +346,35 @@ class RAGService:
             prompt_messages=messages,
         )
 
+    def has_term_evidence(self, question, chunks, weights=None):
+        """Sorunun kelimeleri seçilen context'te gerçekten geçiyor mu?
+
+        Similarity skoru konu benzerliğini ölçer, cevabın metinde bulunup
+        bulunmadığını değil. Konusu dokümana yakın ama cevabı dokümanda olmayan
+        sorular bu yüzden similarity eşiğini rahatça geçebiliyor. Kelime kanıtı
+        bağımsız bir sinyaldir ve bu iki durumu ayırır.
+
+        Bu kontrol LLM çağrısından önce yapılır. Böylece hem kanıtsız soruya
+        uydurma cevap üretilmesi engellenir, hem de `generate_with_fallback`
+        içindeki yanlış ret koruması yalnızca gerçekten kanıt varken devreye
+        girer; modelin doğru reddi artık ezilmez.
+
+        `weights` retrieval'ın korpustan ölçtüğü ayırt edicilik ağırlıklarıdır.
+        Verilmezse bütün kelimeler eşit sayılır; bu davranış ölçümde sızdırdı,
+        bu yüzden uygulama yolunda ağırlıklar daima gelir.
+        """
+        coverage = term_coverage(
+            question,
+            chunks,
+            min_prefix=self.term_evidence_min_prefix,
+            weights=weights,
+        )
+
+        if coverage is None:
+            return True
+
+        return coverage >= self.term_evidence_threshold
+
     def should_use_extractive_answer(self, sources):
         if not self.use_extractive_fallback or len(sources) != 1:
             return False
@@ -330,8 +386,12 @@ class RAGService:
         )
 
     def select_matched_context_chunks(self, chunks):
+        # Göreli marj en yüksek cosine skoruna göre ölçülür, listenin ilk
+        # elemanına göre değil: hybrid sıralamada ilk eleman daha düşük cosine
+        # alabilir ve marj o kadar aşağı kayarak alakasız chunk'ları context'e
+        # sokar.
         relative_threshold = (
-            float(chunks[0]["score"]) - self.context_relative_score_margin
+            gate_score(chunks) - self.context_relative_score_margin
         )
         effective_threshold = max(
             self.context_score_threshold,
