@@ -28,12 +28,21 @@ NO_EVIDENCE_ANSWER = "Bu bilgi verilen dokümanlarda yok."
 #     öneki) yanlış eksiklik ortadan kalktı ve ağırlık asıl işini yaptı:
 #     boşluk 0.21.
 #
-# Güvenli eşik aralığı: tuzak max 0.60, alakalı min 0.82. 0.70 seçildi; iki
-# yana 0.10'luk eşit pay bırakır. Eşiği tuzak maksimumuna EŞİT seçmek daha önce
-# iki kez sızdırdı (0.50 ve 0.60); eşitlik geçer, bu yüzden aralığın ortası.
+# Korpus 24'ten 47 chunk'a çıkınca kalibrasyon yeniden yapıldı. IDF ağırlıkları
+# korpustan geldiği için doküman eklemek bu eşiği doğrudan etkiler:
 #
-# Eval seti büyüdükçe yeniden ölç; ölçmeden değiştirme.
-TERM_EVIDENCE_THRESHOLD = 0.70
+#   24 chunk, 20 vaka : tuzak max 0.60, alakalı min 0.82, boşluk 0.21
+#   47 chunk, 35 vaka : tuzak max 0.63, alakalı min 0.72, boşluk 0.09
+#
+# Boşluk daraldı çünkü korpus büyüdükçe soru kelimelerinin bir kısmı kaçınılmaz
+# olarak başka dokümanlarda da geçiyor. 0.67 seçildi; aralığın ortasıdır.
+# Eşiği tuzak maksimumuna EŞİT seçmek daha önce iki kez sızdırdı (0.50 ve 0.60);
+# eşitlik geçer, bu yüzden daima aralığın ortası alınır.
+#
+# Doküman eklendiğinde veya eval seti büyüdüğünde yeniden ölç; ölçmeden
+# değiştirme. Boşluk daralmaya devam ederse oran tabanlı kapı yerine
+# groundedness kontrolüne geçmek gerekecek.
+TERM_EVIDENCE_THRESHOLD = 0.67
 TERM_EVIDENCE_MIN_PREFIX = 5
 TERM_EVIDENCE_MIN_SHORT_ROOT = 3
 TERM_EVIDENCE_MIN_TERM_LENGTH = 3
@@ -60,17 +69,25 @@ USE_HYBRID_SEARCH = True
 BM25_K1 = 1.5
 BM25_B = 0.75
 
-# RRF sabiti. `tools/hybrid_search_analysis.py`, 10 etiketli vaka:
+# RRF sabiti. `tools/hybrid_search_analysis.py`, 22 etiketli vaka, 47 chunk:
 #
-#   dense              R@1 0.6364  R@3 0.8636  MRR 0.7955
-#   hybrid k=1..60     R@1 0.8182  R@3 0.9545  MRR 0.9091
+#   dense           R@1 0.7273  R@3 0.8864  R@5 0.9545  MRR 0.8220
+#   hybrid k=1      R@1 0.8636  R@3 0.9773  R@5 1.0000  MRR 0.9318
+#   hybrid k=2      R@1 0.8636  R@3 0.9773  R@5 1.0000  MRR 0.9318   <- seçilen
+#   hybrid k=3,4    R@1 0.8182  R@3 0.9773  R@5 1.0000  MRR 0.9091
+#   hybrid k=5..60  R@1 0.8182  R@3 0.9773  R@5 1.0000  MRR 0.9015
 #
-# k=1 ile k=60 arasındaki bütün değerler birebir aynı sonucu veriyor: 24 chunk'lık
-# korpusta sparse sinyalin gördüğü chunk sayısı azdır, bu yüzden kararı "iki
-# sinyal de gördü mü" belirliyor ve sıra farkları hiç devreye girmiyor. Ölçümde
-# ayırt edilemeyen bir parametreyi veriye uydurmak yerine literatür geleneği olan
-# 60 seçildi. Eval seti veya korpus büyüdüğünde yeniden ölç.
-RRF_K = 60
+# İlk ölçüm (11 vaka, 24 chunk) k=1..60 arasını ayırt edememişti ve gelenek olan
+# 60 seçilmişti. Korpus ve set iki katına çıkınca fark ortaya çıktı: k büyüdükçe
+# sonuç monoton kötüleşiyor. Sebep mekanizmada: büyük k iki listede de ortalarda
+# kalanı, küçük k tek listede tepe yapanı ödüllendirir. Bu korpusta BM25'in
+# birebir terim eşleşmesi cosine'den daha güvenilir bir sinyal, çünkü çok dilli
+# embedding modeli Türkçe'de zayıf kalıyor ("Yedekleme neden gereklidir?"
+# sorusunda doğru chunk cosine 0.1972 alıyor ama BM25'te 1. sırada).
+#
+# k=1 ile k=2 birebir aynı; daha az uç olan 2 seçildi. Bu bir kalibrasyondur,
+# gelenek değil; set her büyüdüğünde yeniden ölç.
+RRF_K = 2
 
 USE_EXTRACTIVE_FALLBACK = True
 EXTRACTIVE_SCORE_THRESHOLD = 0.50

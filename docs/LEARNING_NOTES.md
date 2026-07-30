@@ -308,7 +308,7 @@ ile 0.30 arasındaki farkla aynı sayılır. Bu yüzden ikinci bir karar verildi
 **birleşik skor yalnızca sıralamada kullanılır**, eşik karşılaştırmalarında ve
 kullanıcıya gösterimde cosine skoru kalır.
 
-Ölçülen sonuç: `Recall@1` 0.64 -> 0.82, `MRR` 0.80 -> 0.91.
+Ölçülen sonuç: `Recall@1` 0.73 -> 0.86, `MRR` 0.82 -> 0.93.
 
 RRF'in `k` sabiti sezgisel değil. İki listenin birden gördüğü chunk, her k
 değerinde tek listenin gördüğünün önüne geçer. k'nın belirlediği şey, bir listede
@@ -370,8 +370,8 @@ Recall@5 : 1.0000
 MRR      : 0.8333
 ```
 
-Güncel değerler (hybrid search sonrası, 11 etiketli vaka):
-`Recall@1 = 0.8182`, `Recall@3 = 0.9545`, `Recall@5 = 1.0000`, `MRR = 0.9091`.
+Güncel değerler (hybrid search sonrası, 22 etiketli vaka):
+`Recall@1 = 0.8636`, `Recall@3 = 0.9773`, `Recall@5 = 1.0000`, `MRR = 0.9318`.
 
 Bu tablo, eski eval'in neden yetersiz olduğunun kanıtıdır. Eski eval `11/11 PASS`
 diyordu çünkü yalnızca "doğru dosya geldi mi" diye soruyordu. Recall@1'in 0.6667

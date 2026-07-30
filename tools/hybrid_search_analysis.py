@@ -30,7 +30,7 @@ from app.retrieval import get_top_chunks  # noqa: E402
 CASES_PATH = "eval_cases.json"
 METRIC_TOP_K = 5
 METRIC_K_VALUES = (1, 3, 5)
-RRF_K_CANDIDATES = (1, 3, 5, 10, 20, 60)
+RRF_K_CANDIDATES = (1, 2, 3, 4, 5, 10, 20, 60)
 
 
 def load_labeled_cases():

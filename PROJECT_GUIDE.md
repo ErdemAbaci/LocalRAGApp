@@ -576,15 +576,15 @@ python eval.py --update-baseline  # güncel metrikleri baseline olarak kaydet
 Son doğrulanan sonuç:
 
 ```text
-23/23 test başarılı
+38/38 test başarılı
 
-Recall@1 : 0.8182
-Recall@3 : 0.9545
+Recall@1 : 0.8636
+Recall@3 : 0.9773
 Recall@5 : 1.0000
-MRR      : 0.9091
+MRR      : 0.9318
 ```
 
-Yalnızca dense (hybrid search kapalı) ölçüm: `0.6364 / 0.8636 / 1.0000 / 0.7955`.
+Yalnızca dense (hybrid search kapalı) ölçüm: `0.7273 / 0.8864 / 0.9545 / 0.8220`.
 
 **Neden metrik gerekliydi?** Eski eval yalnızca `results[0]`'a bakıyor ve "doğru
 dosya geldi mi" diye soruyordu. `11/11 PASS` diyordu ama doğru chunk üç vakada
@@ -966,11 +966,11 @@ Son eval ve unit test çalışmasında:
 ```text
 24 chunk
 3 kaynak dosya
-23/23 eval testi başarılı (bilinen boşluk kalmadı)
+38/38 eval testi başarılı (bilinen boşluk kalmadı)
 237/237 unit testi başarılı
 
-Recall@1 = 0.8182   Recall@3 = 0.9545
-Recall@5 = 1.0000   MRR      = 0.9091
+Recall@1 = 0.8636   Recall@3 = 0.9773
+Recall@5 = 1.0000   MRR      = 0.9318
 ```
 
 Başarılı kontroller:
@@ -1095,7 +1095,7 @@ sıralamada kullanılır.** Kapı ve kullanıcıya gösterilen skor cosine kalı
 aksi halde dört eşiğin tamamı yeni bir ölçeğe göre yeniden kalibre edilmek
 zorunda kalırdı; tek değişkeni izole tutmak ölçümü mümkün kıldı.
 
-Sonuç: `Recall@1` 0.64 -> 0.82, `MRR` 0.80 -> 0.91. Manuel testte bozuk cevaba
+Sonuç: `Recall@1` 0.73 -> 0.86, `MRR` 0.82 -> 0.93. Manuel testte bozuk cevaba
 yol açan "Kimlik avından nasıl korunulur?" sorusunda cevabı içeren chunk 4.
 sıradan 1. sıraya çıktı.
 

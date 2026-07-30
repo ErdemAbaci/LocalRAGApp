@@ -291,17 +291,17 @@ python eval.py --compare
 Son dogrulanan durumda:
 
 - `237/237` birim testi basarili
-- `23/23` retrieval, indeks ve cevap karari kontrolu basarili
+- `38/38` retrieval, indeks ve cevap karari kontrolu basarili
 - 3 kaynak dosya ve 24 chunk saglikli; maksimum chunk uzunlugu 109 token
 
 | Metrik | Deger |
 |---|---:|
-| Recall@1 | 0.8182 |
-| Recall@3 | 0.9545 |
+| Recall@1 | 0.8636 |
+| Recall@3 | 0.9773 |
 | Recall@5 | 1.0000 |
-| MRR | 0.9091 |
+| MRR | 0.9318 |
 
-Yalnizca dense retrieval ile ayni set: `0.6364 / 0.8636 / 1.0000 / 0.7955`.
+Yalnizca dense retrieval ile ayni set: `0.7273 / 0.8864 / 0.9545 / 0.8220`.
 Fark hybrid search'ten gelir; `Recall@5` hybrid'den once de `1.0` oldugu icin
 sorun dogru parcayi bulmak degil siralamakti.
 
@@ -409,7 +409,7 @@ sonrakiler ancak o yetenek varsa dogrulanabilir olur.
    gosterdi.
 4. ~~**Hybrid search**~~ — **tamamlandi.** Elle yazilmis BM25 ve RRF ile
    siralama birlestirme. Birlesik skor yalnizca siralamada kullanilir; kapi
-   skoru cosine kalir. `Recall@1` 0.64 -> 0.82, `MRR` 0.80 -> 0.91.
+   skoru cosine kalir. `Recall@1` 0.73 -> 0.86, `MRR` 0.82 -> 0.93.
 5. **Reranking** — genis aday havuzunu cross-encoder ile yeniden siralama.
    Hybrid sonrasi kalan bosluk: `Recall@1 = 0.82`, yani alti vakadan birinde
    dogru parca halen en ustte degil.

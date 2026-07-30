@@ -229,9 +229,13 @@ class RAGServiceTests(unittest.TestCase):
                 dense_best_score=0.62,
             ),
         ]
+        class StubLLM:
+            def generate_answer(self, _messages):
+                return "RAG, ilgili bilgiyi dokümanlardan bulup cevaba dayanak yapar."
+
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
-            llm_factory=Mock(),
+            llm_factory=StubLLM,
             similarity_threshold=0.20,
         )
 

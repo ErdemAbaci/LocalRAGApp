@@ -168,6 +168,150 @@
     "note": "Manuel testte yanlış reddedildi; kelime kanıtı korunulur~korunmak eşleşmesini kaçırıyordu."
   },
   {
+    "name": "distributed_version_control",
+    "question": "Dağıtık sürüm kontrolü nasıl çalışır?",
+    "expectation": "relevant",
+    "expected_source": "versiyon_kontrol.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "deponun tam bir kopyası",
+        "sunucuya bağlanmak"
+      ]
+    ]
+  },
+  {
+    "name": "commit_message_guidance",
+    "question": "Commit mesajı nasıl yazılmalıdır?",
+    "expectation": "relevant",
+    "expected_source": "versiyon_kontrol.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "ne yaptığını değil neden yapıldığını"
+      ]
+    ]
+  },
+  {
+    "name": "rebase_shared_branch",
+    "question": "Yeniden temellendirme neden paylaşılmış dalda kullanılmamalıdır?",
+    "expectation": "relevant",
+    "expected_source": "versiyon_kontrol.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "commit kimliklerini yeniden",
+        "paylaşılmış bir dalda"
+      ]
+    ]
+  },
+  {
+    "name": "merge_conflict_resolution",
+    "question": "Çakışma nasıl çözülür?",
+    "expectation": "relevant",
+    "expected_source": "versiyon_kontrol.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "Çakışan bölge",
+        "yan yana"
+      ]
+    ]
+  },
+  {
+    "name": "repository_secrets",
+    "question": "Gizli değerler depoya yazılırsa ne olur?",
+    "expectation": "relevant",
+    "expected_source": "versiyon_kontrol.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "geçmişte kalmaya devam",
+        "geçersiz kılınması"
+      ]
+    ]
+  },
+  {
+    "name": "test_pyramid",
+    "question": "Test piramidi nedir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "tabanda çok sayıda hızlı birim testi",
+        "tepede az sayıda"
+      ]
+    ]
+  },
+  {
+    "name": "unit_vs_integration_test",
+    "question": "Birim testi ile entegrasyon testi arasındaki fark nedir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "çevresinden yalıtarak",
+        "yanlış birleştiğini"
+      ]
+    ]
+  },
+  {
+    "name": "stub_vs_mock",
+    "question": "Saplama ile taklit nesne arasındaki fark nedir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "önceden belirlenmiş bir değer döndürür",
+        "beklenen çağrının gerçekten yapılıp"
+      ]
+    ],
+    "note": "Alan terimleri (saplama, taklit nesne) çok dilli embedding'de zayıf eşleşiyor."
+  },
+  {
+    "name": "flaky_test",
+    "question": "Kırılgan test nedir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "bazen geçip bazen kalan",
+        "zamanlamaya, sıraya"
+      ]
+    ]
+  },
+  {
+    "name": "code_coverage_limit",
+    "question": "Yüksek kod kapsamı doğruluk kanıtı mıdır?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "doğruluk kanıtı değildir",
+        "Hiçbir şey iddia etmeyen"
+      ]
+    ]
+  },
+  {
+    "name": "backup_purpose",
+    "question": "Yedekleme neden gereklidir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.3,
+    "relevant_chunk_terms": [
+      [
+        "fidye yazılımı",
+        "geri getirebilmek"
+      ]
+    ],
+    "note": "Dense sinyal bu soruda zayıf: doğru chunk cosine 0.1972, korpus maksimumu 0.3184. BM25 onu 1. sıraya taşıyor. min_score düşük tutuldu çünkü ölçülen şey sıralama; kapı skoru zaten SIMILARITY_THRESHOLD'un üstünde."
+  },
+  {
     "name": "out_of_scope_weather",
     "question": "Hava nasıl?",
     "expectation": "not_found",
@@ -236,5 +380,33 @@
     "expect_answer_mode": "no_evidence",
     "difficulty": "hard",
     "note": "Küçük harfli/noktalamasız biçim farklı context getiriyor ve kapsama tam eşiğe eşit çıkıyordu."
+  },
+  {
+    "name": "hard_negative_git_revert_command",
+    "question": "Git'te bir commit'i geri almak için hangi komut yazılır?",
+    "expectation": "not_found",
+    "difficulty": "hard",
+    "expect_answer_mode": "no_evidence"
+  },
+  {
+    "name": "hard_negative_branch_naming",
+    "question": "Dal isimlendirmesinde hangi kural uygulanmalıdır?",
+    "expectation": "not_found",
+    "difficulty": "hard",
+    "expect_answer_mode": "no_evidence"
+  },
+  {
+    "name": "hard_negative_coverage_target",
+    "question": "Kod kapsamı yüzde kaç olmalıdır?",
+    "expectation": "not_found",
+    "difficulty": "hard",
+    "expect_answer_mode": "no_evidence"
+  },
+  {
+    "name": "hard_negative_test_library",
+    "question": "Python'da birim test yazmak için hangi kütüphane kullanılır?",
+    "expectation": "not_found",
+    "difficulty": "hard",
+    "expect_answer_mode": "no_evidence"
   }
 ]

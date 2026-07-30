@@ -70,6 +70,12 @@ QUESTION_STOPWORDS = frozenset({
     # "önemli" kelimesinin birebir geçmesini gerektirmesi yanlıştır; manuel
     # testte "Çok faktörlü doğrulama neden önemli?" bu yüzden reddedildi.
     "önemli", "önemlidir", "gerekli", "gereklidir",
+    # "X ile Y arasındaki fark nedir?" kalıbı ve `-malıdır` çekimleri. Korpus
+    # 24'ten 47 chunk'a çıkınca bunlar ölçümde yanlış ret üretti: hiçbiri
+    # dokümanda geçmediği için en yüksek IDF ağırlığını alıyor ve asıl içerik
+    # kelimeleri eşleşse bile kapsamayı eşiğin altına çekiyorlardı.
+    "arasındaki", "arasında", "fark", "farkı", "farkları",
+    "yazılmalıdır", "uygulanmalıdır", "tutulmalıdır", "seçilmelidir",
 })
 
 

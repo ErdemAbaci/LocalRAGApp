@@ -131,9 +131,9 @@ MAX_CONTEXT_CHUNKS = 5
 USE_HYBRID_SEARCH = True
 BM25_K1 = 1.5
 BM25_B = 0.75
-RRF_K = 60
+RRF_K = 2
 
-TERM_EVIDENCE_THRESHOLD = 0.70
+TERM_EVIDENCE_THRESHOLD = 0.67
 TERM_EVIDENCE_MIN_PREFIX = 5
 TERM_EVIDENCE_MIN_SHORT_ROOT = 3
 TERM_EVIDENCE_MIN_TERM_LENGTH = 3
@@ -153,10 +153,10 @@ Bu değerler mevcut küçük veri seti ve regression testlerine göre seçildi. 
 
 Son doğrulanan durumda:
 
-- 3 kaynak dosya ve 24 chunk bulunuyor. En uzun chunk özel tokenlar dahil 109 tokendır; embedding modelinin 128 token sınırını aşan parça yoktur. `cybersecurity.txt` beş ayrı güvenlik konusu içeriyor.
-- Retrieval, indeks ve cevap kararı değerlendirmesi `23/23` başarılı; bilinen boşluk (`GAP`) kalmadı.
-- Retrieval metrikleri: `Recall@1 = 0.8182`, `Recall@3 = 0.9545`, `Recall@5 = 1.0000`, `MRR = 0.9091` (11 etiketli vaka).
-  Bu değerler hybrid search sonrasıdır. Yalnızca dense ile ölçüm: `0.6364 / 0.8636 / 1.0000 / 0.7955`.
+- 5 kaynak dosya ve 47 chunk bulunuyor. En uzun chunk özel tokenlar dahil 109 tokendır; embedding modelinin 128 token sınırını aşan parça yoktur. `cybersecurity.txt` beş ayrı güvenlik konusu içeriyor.
+- Retrieval, indeks ve cevap kararı değerlendirmesi `38/38` başarılı; bilinen boşluk (`GAP`) kalmadı.
+- Retrieval metrikleri: `Recall@1 = 0.8636`, `Recall@3 = 0.9773`, `Recall@5 = 1.0000`, `MRR = 0.9318` (22 etiketli vaka).
+  Bu değerler hybrid search sonrasıdır. Yalnızca dense ile ölçüm: `0.7273 / 0.8864 / 0.9545 / 0.8220`.
   `Recall@5` hybrid'den önce de `1.0` idi; yani sorun doğru parçayı **bulmak** değil
   **sıralamak**tı ve iyileşme tam olarak orada gerçekleşti.
 - Hard negative ölçümü kritik bir sınırı ortaya çıkardı: cevabı dokümanda hiç
@@ -178,9 +178,13 @@ Son doğrulanan durumda:
   bağımsız olarak en yüksek cosine değerinden okur. Aksi halde dört eşiğin
   tamamı, hard negative `max_score` kontrolü ve gösterilen skor yeni bir ölçeğe
   göre yeniden kalibre edilmek zorunda kalırdı.
-  `RRF_K` ölçüldü: 1 ile 60 arasındaki bütün değerler bu korpusta aynı sonucu
-  veriyor, çünkü kararı sıra farkları değil "iki sinyal de gördü mü" belirliyor.
-  Ayırt edilemeyen bir parametre veriye uydurulmadı; gelenek olan 60 seçildi.
+  `RRF_K` iki kez ölçüldü. İlk ölçümde (24 chunk, 11 vaka) 1 ile 60 arası
+  ayırt edilemedi ve gelenek olan 60 seçildi. Korpus 47 chunk'a, set 22 vakaya
+  çıkınca fark ortaya çıktı: k büyüdükçe sonuç monoton kötüleşiyor
+  (k=1,2 -> MRR 0.9318; k=3,4 -> 0.9091; k=5..60 -> 0.9015). `RRF_K = 2`
+  seçildi. Sebep mekanizmada: büyük k iki listede de ortalarda kalanı, küçük k
+  tek listede tepe yapanı ödüllendirir; bu korpusta BM25'in birebir terim
+  eşleşmesi cosine'den güvenilir, çünkü çok dilli embedding Türkçe'de zayıf.
 - **Hybrid search kelime kanıtı kapısının kör noktasını açığa çıkardı ve kapı
   IDF ağırlıklarına geçirildi.** İki mekanizma da kelime örtüşmesine bakıyor;
   retrieval güçlenince kapı sızdırdı. `hard_negative_firewall_rules` sorusunda
@@ -211,22 +215,56 @@ Son doğrulanan durumda:
   kalıbı kelimeleri için geçersizdir, çünkü onlar soruda bulunup dokümanda
   bulunmamayı zaten doğal olarak yapar. Stopword listesi bu yüzden IDF'in
   yerine geçmez, ön koşuludur.
-- **Açık sorun: `RRF_K = 60` tepe sinyali cezalandırıyor.** Manuel testte
-  "Yedekleme neden gereklidir?" sorusunda BM25 doğru chunk'ı (218, "Güvenli
-  Yedekleme") `1.` sıraya koydu, ama füzyon 220'yi (olay müdahalesi) seçti:
-  220 iki listede de ortalarda (dense 2., sparse 3.), 218 ise yalnızca birinde
-  tepe (dense 5., sparse 1.). Büyük `k` istikrarı, küçük `k` tepeyi ödüllendirir;
-  `k=1` olsaydı 218 kazanırdı. Tek vakayla sabit değiştirilmedi. Vaka eval setine
-  eklenip `tools/hybrid_search_analysis.py` taraması tekrarlanmalı.
+- **Korpus 24'ten 47 chunk'a çıkarıldı; kalibrasyonların korpusa bağlı olduğu
+  ölçüldü.** `docs/versiyon_kontrol.txt` ve `docs/yazilim_testi.txt` eklendi;
+  eval seti 20'den 35 vakaya, etiketli vaka 11'den 22'ye çıktı. Yeni dokümanlar
+  bilinçli olarak mevcut hard negative konularını (yedekleme sıklığı, parola
+  uzunluğu, fidye yazılımı aracı, k-means küme sayısı, min-max formülü, güvenlik
+  duvarı) içermez; içerselerdi o vakalar sessizce geçersizleşirdi.
+  Genel ders: IDF ağırlıkları korpustan gelir, bu yüzden **doküman eklemek eşik
+  kalibrasyonunu değiştirir.** Reindex sonrası `tools/term_evidence_analysis.py`
+  ve `tools/hybrid_search_analysis.py` yeniden çalıştırılmalıdır.
+- ~~**Açık sorun: `RRF_K` tepe sinyali cezalandırıyor.**~~ **Çözüldü.** Manuel
+  testte "Yedekleme neden gereklidir?" sorusunda BM25 doğru chunk'ı `1.` sıraya
+  koymuşken füzyon olay müdahalesi chunk'ını seçiyordu: o chunk iki listede de
+  ortalarda (dense 2., sparse 3.), doğrusu ise yalnızca birinde tepe (dense 5.,
+  sparse 1.). `RRF_K = 60` istikrarı ödüllendirdiği için doğru chunk eleniyordu.
+  Korpus büyüdükten sonra tarama tekrarlandı, fark ölçülebilir hale geldi ve
+  `RRF_K = 2` seçildi; vaka artık `1.` sırada.
   Not: dense skorun bu soruda `0.1972` kalması ayrı bir zayıflıktır; embedding
-  modeli birebir konu eşleşmesini bile yakalayamadı.
+  modeli birebir konu eşleşmesini bile yakalayamadı. Hybrid search'ün bu
+  korpusta neden gerekli olduğunun en net kanıtı budur.
+- **Kelime kanıtı eşiği üçüncü kez kalibre edildi: `0.70` -> `0.67`.**
+  47 chunk'ta ayrım boşluğu `0.21`'den `0.09`'a düştü (tuzak max `0.63`, alakalı
+  min `0.72`). Boşluk daralıyor çünkü korpus büyüdükçe soru kelimelerinin bir
+  kısmı kaçınılmaz olarak başka dokümanlarda da geçiyor. Ayrıca `arasındaki`,
+  `fark`, `yazılmalıdır` gibi soru kalıbı kelimeleri stopword listesine eklendi;
+  dokümanlarda hiç geçmedikleri için en yüksek IDF ağırlığını alıp meşru
+  soruları reddediyorlardı (`stub_vs_mock`, `commit_message_guidance`,
+  `unit_vs_integration_test`). Bu, `önemli` bulgusunun aynısıdır ve listenin
+  elle bakım gerektiren zayıf bir nokta olduğunu gösterir. Boşluk daralmaya
+  devam ederse oran tabanlı kapıdan groundedness kontrolüne geçilmelidir.
+- **Düzeltilen hata: context seçimi sıralamayla çelişiyordu.**
+  `select_matched_context_chunks()` context'i cosine eşiğine göre seçerken liste
+  hybrid sıraya göre geliyordu. Ölçümde birinci sıradaki doğru chunk elenip
+  üçüncü sıradaki alakasız chunk context'e girdi ("Saplama ile taklit nesne
+  arasındaki fark nedir?": doğru chunk cosine `0.3147` ile eşiği geçemedi,
+  alakasız chunk `0.3623` ile geçti). Artık `chunks[0]` her zaman context'e
+  girer. Sıralamanın birincisini elemek, hybrid search'ün kazandırdığını geri
+  vermektir.
+- **Eval açığı kapatıldı: alakalı vakalar artık kapıyı da kontrol ediyor.**
+  Önceden `evaluate_relevant_case()` yalnızca kaynak, skor ve sırayı
+  doğruluyordu; retrieval doğru parçayı bulup kelime kanıtı kapısı onu
+  reddettiğinde vaka PASS görünüyor, kullanıcı ise "Bu bilgi verilen
+  dokümanlarda yok." cevabı alıyordu. `stub_vs_mock` tam olarak böyle geçti.
+  Kontrol LLM yüklemeden yalnızca kapıyı çalıştırır.
 - **Açık sorun: context kirlenmesi.** "Çok faktörlü doğrulama neden önemli?"
   sorusunda doğru chunk (216) hem cosine hem BM25'te açık ara birinci, ama
   `datamining.pdf`'ten üç parça da mutlak eşiği geçtiği için context'e girdi.
   Model karışık metinden bozuk cevap üretti, `get_answer_validation_error`
   yakaladı ve `fallback_extractive`e düşüldü. Koruma çalıştı ama context seçimi
-  hâlâ yalnızca cosine eşiğine bakıyor; füzyon sırası veya sparse kanıt şartı
-  değerlendirilmeli.
+  hâlâ mutlak cosine eşiğine bakıyor; sparse kanıt şartı veya füzyon sırasına
+  dayalı bir üst sınır değerlendirilmeli.
 - **Kelime kanıtı kapısı eklendi ve yukarıdaki hatayı kapattı.**
   `app/term_evidence.py`, sorunun ayırt edici kelimelerinin seçilen context'te
   geçme oranını hesaplar; `RAGService.has_term_evidence()` bunu LLM çağrısından
@@ -498,7 +536,7 @@ Sıradaki hedefleri şu sırayla ele al:
      seçilmiş değerler. Kelime kanıtı kapısı eklendikten sonra bu eşiklerin
      hangi yükü taşıdığı değişti; yeniden ölçülmeli. Hybrid search bunu
      etkilemedi, çünkü birleşik skor kapıda kullanılmıyor.
-   - **Kelime kanıtı eşiğinin kırılganlığı.** `TERM_EVIDENCE_THRESHOLD = 0.70`
+   - **Kelime kanıtı eşiğinin kırılganlığı.** `TERM_EVIDENCE_THRESHOLD = 0.67`
      20 vakayla ölçüldü ve boşluk `0.21`. Bu üçüncü kalibrasyon; ilk ikisi
      (`0.50`, `0.60`) gerçek kullanımda sızdırdı. Set her büyüdüğünde yeniden
      ölç; `tools/term_evidence_analysis.py` bunu tek komutla yapar.

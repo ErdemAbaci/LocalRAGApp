@@ -16,6 +16,7 @@ from app.eval_metrics import (
 from app.llm import is_valid_answer
 from app.rag_service import RAGService
 from app.retrieval import gate_score, get_top_chunks
+from app.term_evidence import term_coverage
 
 
 class LLMShouldNotLoadError(AssertionError):
@@ -123,11 +124,15 @@ def evaluate_relevant_case(case, results):
             f"gelen={best_result['source_name']}"
         )
 
-    if best_result["score"] < min_score:
-        return False, (
-            f"skor={best_result['score']:.4f}, "
-            f"minimum={min_score:.4f}"
-        )
+    # Kapı skoru kullanılır, listenin ilk elemanının skoru değil. Hybrid
+    # sıralamada birinci sıradaki chunk düşük cosine alabilir ("Yedekleme neden
+    # gereklidir?" sorusunda doğru chunk 0.1972 alıyor); o sayıyı eşikle
+    # karşılaştırmak doğru sonucu başarısız gösterir. min_score'un asıl sorduğu
+    # şey "bu soru kapsam içinde mi", uygulamanın kendi kapısıyla aynı sorudur.
+    gate = gate_score(results)
+
+    if gate < min_score:
+        return False, f"kapı skoru={gate:.4f}, minimum={min_score:.4f}"
 
     expected_chunk_terms = case.get("expected_chunk_terms", [])
     normalized_chunk = normalize_text(best_result["chunk_text"])
@@ -140,14 +145,32 @@ def evaluate_relevant_case(case, results):
     if missing_terms:
         return False, f"en iyi chunk içinde eksik kavramlar: {', '.join(missing_terms)}"
 
+    # Kelime kanıtı kapısı alakalı vakalarda da kontrol edilir. Aksi halde
+    # retrieval doğru parçayı bulup kapı onu reddettiğinde vaka PASS görünür ve
+    # kullanıcı "bu bilgi dokümanlarda yok" cevabı alır. Ölçümde tam olarak bu
+    # oldu (`stub_vs_mock`). LLM yüklenmez; yalnızca kapı çalıştırılır.
+    service = RAGService()
+    matched_chunks = service.select_matched_context_chunks(results)
+    context_chunks = service.order_context_chunks(
+        service.expand_context_chunks(matched_chunks),
+        matched_chunks,
+    )
+    term_weights = results[0].get("question_term_weights")
+
+    if not service.has_term_evidence(case["question"], context_chunks, term_weights):
+        coverage = term_coverage(
+            case["question"],
+            context_chunks,
+            weights=term_weights,
+        )
+        return False, (
+            "kelime kanıtı kapısı reddetti: "
+            f"kapsama={format_metric(coverage)}, "
+            f"eşik={service.term_evidence_threshold:.2f}"
+        )
+
     expected_context_terms = case.get("expected_context_terms", [])
     if expected_context_terms:
-        service = RAGService()
-        matched_chunks = service.select_matched_context_chunks(results)
-        context_chunks = service.order_context_chunks(
-            service.expand_context_chunks(matched_chunks),
-            matched_chunks,
-        )
         normalized_context = normalize_text("\n".join(
             chunk["chunk_text"]
             for chunk in context_chunks

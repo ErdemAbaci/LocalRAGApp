@@ -397,13 +397,17 @@ class RAGService:
             self.context_score_threshold,
             relative_threshold,
         )
-        matched_chunks = [
+        # En iyi sıralanan chunk her zaman context'e girer. Eşik cosine üzerinden
+        # çalışır, sıralama ise hybrid; ölçümde bu ikisi çelişti. "Saplama ile
+        # taklit nesne arasındaki fark nedir?" sorusunda cevabı içeren chunk
+        # 1. sıradaydı ama cosine'i 0.3147 olduğu için elendi, 3. sıradaki
+        # alakasız chunk 0.3623 ile context'e girdi. Sıralamanın birincisini
+        # elemek, hybrid search'ün kazandırdığı şeyi geri vermektir.
+        matched_chunks = [chunks[0]] + [
             chunk
-            for chunk in chunks
+            for chunk in chunks[1:]
             if chunk["score"] >= effective_threshold
         ]
-        if not matched_chunks:
-            matched_chunks = [chunks[0]]
 
         return [
             dict(chunk, context_role="matched")

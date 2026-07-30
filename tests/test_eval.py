@@ -6,12 +6,17 @@ import eval as eval_module
 class RelevantCaseEvaluationTests(unittest.TestCase):
     def test_expected_chunk_terms_are_required(self):
         case = {
+            "question": "Bilgi güvenliğinin temel hedefleri nelerdir?",
             "expected_source": "security.txt",
             "min_score": 0.40,
             "expected_chunk_terms": ["gizlilik", "bütünlük", "erişilebilirlik"],
         }
         results = [{
+            "id": 1,
             "source_name": "security.txt",
+            "source_type": "txt",
+            "page_number": None,
+            "chunk_index": 1,
             "score": 0.75,
             "chunk_text": "Gizlilik ve bütünlük bilgi güvenliği hedefleridir.",
         }]
@@ -23,12 +28,17 @@ class RelevantCaseEvaluationTests(unittest.TestCase):
 
     def test_source_score_and_expected_terms_can_pass_together(self):
         case = {
+            "question": "Bilgi güvenliğinin temel hedefleri nelerdir?",
             "expected_source": "security.txt",
             "min_score": 0.40,
             "expected_chunk_terms": ["gizlilik", "bütünlük", "erişilebilirlik"],
         }
         results = [{
+            "id": 1,
             "source_name": "security.txt",
+            "source_type": "txt",
+            "page_number": None,
+            "chunk_index": 1,
             "score": 0.75,
             "chunk_text": (
                 "Bilgi güvenliği gizlilik, bütünlük ve erişilebilirlik hedeflerini korur."
@@ -42,6 +52,7 @@ class RelevantCaseEvaluationTests(unittest.TestCase):
 
     def test_expected_context_terms_can_be_satisfied_by_neighbor(self):
         case = {
+            "question": "3-2-1 kuralı nedir?",
             "expected_source": "security.txt",
             "min_score": 0.40,
             "expected_context_terms": ["üç kopya", "geri yükleme"],
