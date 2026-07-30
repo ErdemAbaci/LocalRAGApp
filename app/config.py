@@ -60,6 +60,13 @@ TERM_EVIDENCE_MIN_TERM_LENGTH = 3
 # CONTEXT_SCORE_THRESHOLD, CONTEXT_RELATIVE_SCORE_MARGIN ve
 # EXTRACTIVE_SCORE_THRESHOLD'un tamamı yeni bir ölçeğe göre yeniden kalibre
 # edilmek zorunda kalırdı. Tek değişkeni izole tutmak ölçümü mümkün kılıyor.
+# İkinci ve sonraki sıraların context'e girebilmesi için gereken en düşük
+# IDF ağırlıklı kelime kanıtı. Cosine eşiği konu benzerliğini ölçer ve alakasız
+# dokümandan gelen parçayı da geçirir; ölçümde context'e sızan yedi parçanın
+# cosine'i 0.36-0.53 arasındayken kelime kanıtı en fazla 0.267'ydi.
+# Birinci sıra bu kuralın dışındadır.
+CONTEXT_TERM_EVIDENCE_MIN = 0.30
+
 USE_HYBRID_SEARCH = True
 
 # BM25 doygunluk ve uzunluk normalizasyonu sabitleri. Bunlar literatür

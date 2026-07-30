@@ -216,6 +216,59 @@ class RAGServiceTests(unittest.TestCase):
 
         self.assertEqual(result.mode, "no_evidence")
 
+    def test_unrelated_chunk_is_kept_out_of_context(self):
+        # Ölçülen sızıntı: cosine eşiğini geçen ama sorunun hiçbir ayırt edici
+        # kelimesini taşımayan parçalar context'e giriyor ve model konuları
+        # karıştırıyordu.
+        chunks = [
+            make_chunk(
+                score=0.55,
+                text="Çakışan bölge dosya içinde işaretlenir.",
+                chunk_id=1,
+                chunk_index=1,
+            ),
+            make_chunk(
+                score=0.52,
+                text="Kategorik ifadeler sayısal değerlere dönüştürülür.",
+                chunk_id=2,
+                chunk_index=2,
+            ),
+        ]
+        service = RAGService(llm_factory=Mock())
+
+        matched = service.select_matched_context_chunks(
+            chunks,
+            question="Çakışma nasıl çözülür?",
+        )
+
+        self.assertEqual([chunk["id"] for chunk in matched], [1])
+
+    def test_best_chunk_enters_context_without_term_evidence(self):
+        # Birinci sıra koşulsuz girer; onu kanıt şartıyla elemek retrieval
+        # kararını ikinci kez sorgulamak olurdu.
+        chunks = [make_chunk(score=0.55, text="Alakasız bir metin.", chunk_id=1)]
+        service = RAGService(llm_factory=Mock())
+
+        matched = service.select_matched_context_chunks(
+            chunks,
+            question="Çakışma nasıl çözülür?",
+        )
+
+        self.assertEqual([chunk["id"] for chunk in matched], [1])
+
+    def test_context_filter_is_skipped_without_a_question(self):
+        # Soru bağlamı olmadan çağıran araçlar eski davranışı görmeli.
+        chunks = [
+            make_chunk(score=0.55, text="Çakışan bölge işaretlenir.", chunk_id=1),
+            make_chunk(score=0.52, text="Kategorik ifadeler dönüşür.", chunk_id=2,
+                       chunk_index=2),
+        ]
+        service = RAGService(llm_factory=Mock())
+
+        matched = service.select_matched_context_chunks(chunks)
+
+        self.assertEqual([chunk["id"] for chunk in matched], [1, 2])
+
     def test_gate_score_ignores_hybrid_ordering(self):
         # Hybrid sıralamada ilk eleman daha düşük cosine alabilir. Kapı skorunu
         # listenin başından okumak eşiği sessizce kaydırır.
@@ -317,7 +370,14 @@ class RAGServiceTests(unittest.TestCase):
         evidence = "3-2-1 kuralı verinin üç kopyasını iki ortamda tutmayı önerir."
         chunks = [
             make_chunk(score=0.71, text=evidence),
-            make_chunk(score=0.52, chunk_id=8),
+            # İkinci parça soruyla kelime paylaşmalı; paylaşmazsa context kanıt
+            # filtresi onu eler, tek parça kalır ve akış extractive'e döner.
+            make_chunk(
+                score=0.52,
+                text="Kuralın gerektirdiği kopyalardan biri farklı konumda saklanır.",
+                chunk_id=8,
+                chunk_index=2,
+            ),
         ]
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
@@ -327,7 +387,9 @@ class RAGServiceTests(unittest.TestCase):
         result = service.answer("3-2-1 kuralı nedir?")
 
         self.assertEqual(result.mode, "fallback_extractive")
-        self.assertEqual(result.answer, evidence)
+        # Testin iddiası, modelin yanlış reddinin kaynak metinle değiştirildiği.
+        # İki parça da soruyla örtüştüğü için fallback ikisinden de cümle alabilir.
+        self.assertIn(evidence, result.answer)
         self.assertIn("bulunan kanıtı kullanmadı", result.warning)
 
     def test_activity_and_context_hooks_cover_all_stages(self):

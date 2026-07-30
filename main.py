@@ -28,6 +28,7 @@ from app.cli_input import CLIInputManager, CLIStatus
 from app.config import (
     CONTEXT_RELATIVE_SCORE_MARGIN,
     CONTEXT_SCORE_THRESHOLD,
+    CONTEXT_TERM_EVIDENCE_MIN,
     EXTRACTIVE_SCORE_THRESHOLD,
     RRF_K,
     TERM_EVIDENCE_MIN_SHORT_ROOT,
@@ -349,6 +350,11 @@ def print_config_info():
                 "Modele gönderilecek eşleşme ve komşuların toplam üst sınırı",
             ),
             (
+                "CONTEXT_TERM_EVIDENCE_MIN",
+                CONTEXT_TERM_EVIDENCE_MIN,
+                "İkinci ve sonraki sıraların context'e girmesi için gereken kelime kanıtı",
+            ),
+            (
                 "USE_HYBRID_SEARCH",
                 "açık" if USE_HYBRID_SEARCH else "kapalı",
                 "Anlam benzerliğine kelime örtüşmesi sıralamasını ekler",
@@ -372,6 +378,11 @@ def print_config_info():
                 "TERM_EVIDENCE_MIN_SHORT_ROOT",
                 TERM_EVIDENCE_MIN_SHORT_ROOT,
                 "Kısa köklerde tam kapsanma kuralının geçerli olduğu en kısa uzunluk",
+            ),
+            (
+                "CONTEXT_TERM_EVIDENCE_MIN",
+                CONTEXT_TERM_EVIDENCE_MIN,
+                "İkinci ve sonraki sıraların context'e girmesi için gereken kelime kanıtı",
             ),
             (
                 "USE_HYBRID_SEARCH",

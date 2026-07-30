@@ -7,6 +7,7 @@ from typing import Callable
 from app.config import (
     CONTEXT_RELATIVE_SCORE_MARGIN,
     CONTEXT_SCORE_THRESHOLD,
+    CONTEXT_TERM_EVIDENCE_MIN,
     EXTRACTIVE_SCORE_THRESHOLD,
     MAX_CONTEXT_CHUNKS,
     MAX_EXTRACTIVE_CHARS,
@@ -193,6 +194,7 @@ class RAGService:
         max_context_chunks=MAX_CONTEXT_CHUNKS,
         term_evidence_threshold=TERM_EVIDENCE_THRESHOLD,
         term_evidence_min_prefix=TERM_EVIDENCE_MIN_PREFIX,
+        context_term_evidence_min=CONTEXT_TERM_EVIDENCE_MIN,
     ):
         self.retrieval_func = retrieval_func
         self.llm_factory = llm_factory
@@ -208,6 +210,7 @@ class RAGService:
         self.max_context_chunks = max_context_chunks
         self.term_evidence_threshold = term_evidence_threshold
         self.term_evidence_min_prefix = term_evidence_min_prefix
+        self.context_term_evidence_min = context_term_evidence_min
 
     def answer(
         self,
@@ -262,7 +265,10 @@ class RAGService:
                 source_filter=source_name,
             )
 
-        matched_context_chunks = self.select_matched_context_chunks(chunks)
+        matched_context_chunks = self.select_matched_context_chunks(
+            chunks,
+            question=clean_question,
+        )
         matched_sources = tuple(
             RAGSource.from_chunk(chunk)
             for chunk in matched_context_chunks
@@ -385,7 +391,7 @@ class RAGService:
             and len(best_source.chunk_text) <= self.max_extractive_chars
         )
 
-    def select_matched_context_chunks(self, chunks):
+    def select_matched_context_chunks(self, chunks, question=None):
         # Göreli marj en yüksek cosine skoruna göre ölçülür, listenin ilk
         # elemanına göre değil: hybrid sıralamada ilk eleman daha düşük cosine
         # alabilir ve marj o kadar aşağı kayarak alakasız chunk'ları context'e
@@ -407,12 +413,46 @@ class RAGService:
             chunk
             for chunk in chunks[1:]
             if chunk["score"] >= effective_threshold
+            and self.has_context_term_evidence(question, chunk, chunks[0])
         ]
 
         return [
             dict(chunk, context_role="matched")
             for chunk in matched_chunks
         ]
+
+    def has_context_term_evidence(self, question, chunk, best_chunk):
+        """Bu chunk, sorunun ayırt edici kelimelerinden bir şey taşıyor mu?
+
+        Cosine eşiği konu benzerliğini ölçer ve alakasız bir dokümandan gelen
+        parçayı da geçirebilir. Ölçümde context'e sızan yedi parçanın hiçbirinde
+        kayda değer kelime kanıtı yoktu (en yükseği `0.267`), oysa cosine'leri
+        `0.36`-`0.53` arasındaydı. "Çok faktörlü doğrulama neden önemli?"
+        sorusunda `datamining.pdf` parçaları böyle girip modelin konuları
+        karıştırmasına yol açtı.
+
+        Kural yalnızca ikinci ve sonraki sıralara uygulanır. Birinci sıra
+        koşulsuz girer, çünkü elimizdeki en iyi cevap adayı odur; onu kanıt
+        şartıyla elemek retrieval kararını ikinci kez sorgulamak olur.
+
+        `question` verilmezse filtre uygulanmaz. Böylece bu metodu soru
+        bağlamı olmadan çağıran araçlar eski davranışı görür.
+        """
+        if question is None:
+            return True
+
+        weights = best_chunk.get("question_term_weights")
+        coverage = term_coverage(
+            question,
+            [chunk],
+            min_prefix=self.term_evidence_min_prefix,
+            weights=weights,
+        )
+
+        if coverage is None:
+            return True
+
+        return coverage >= self.context_term_evidence_min
 
     def expand_context_chunks(self, matched_chunks):
         expanded_chunks = []

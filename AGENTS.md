@@ -267,13 +267,20 @@ Son doğrulanan durumda:
   keser. Erken kesmede yalnızca trigram kuralı kullanılır çünkü o **monotondur**;
   kelime oranı kuralı metin uzadıkça yeniden altına düşebildiği için meşru bir
   cevabı yarıda bırakabilirdi. Sonuç değişmez, süre değişir.
-- **Açık sorun: context kirlenmesi.** "Çok faktörlü doğrulama neden önemli?"
-  sorusunda doğru chunk (216) hem cosine hem BM25'te açık ara birinci, ama
-  `datamining.pdf`'ten üç parça da mutlak eşiği geçtiği için context'e girdi.
-  Model karışık metinden bozuk cevap üretti, `get_answer_validation_error`
-  yakaladı ve `fallback_extractive`e düşüldü. Koruma çalıştı ama context seçimi
-  hâlâ mutlak cosine eşiğine bakıyor; sparse kanıt şartı veya füzyon sırasına
-  dayalı bir üst sınır değerlendirilmeli.
+- ~~**Açık sorun: context kirlenmesi.**~~ **Çözüldü.** "Çok faktörlü doğrulama
+  neden önemli?" sorusunda doğru chunk hem cosine hem BM25'te açık ara birinci
+  olmasına rağmen `datamining.pdf`'ten üç parça da mutlak cosine eşiğini geçtiği
+  için context'e giriyordu; model konuları karıştırıyor, doğrulama yakalayıp
+  `fallback_extractive`e düşüyordu.
+  Ölçüm ayırt edici sinyali gösterdi: context'e sızan yedi parçanın cosine'i
+  `0.36`-`0.53` arasındayken IDF ağırlıklı kelime kanıtı en fazla `0.267`'ydi.
+  `CONTEXT_TERM_EVIDENCE_MIN = 0.30` eklendi ve **yalnızca ikinci ve sonraki
+  sıralara** uygulanır; birinci sıra koşulsuz girer, çünkü elimizdeki en iyi
+  cevap adayı odur ve onu kanıt şartıyla elemek retrieval kararını ikinci kez
+  sorgulamak olurdu.
+  Sonuç: beklenen kaynak dışından gelen parça sayısı `7 -> 0`. Retrieval
+  metrikleri değişmedi (filtre sıralamaya değil context'e dokunur), eval
+  `38/38` kaldı ve kelime kanıtı ayrım boşluğu `0.09`'da sabit kaldı.
 - **Kelime kanıtı kapısı eklendi ve yukarıdaki hatayı kapattı.**
   `app/term_evidence.py`, sorunun ayırt edici kelimelerinin seçilen context'te
   geçme oranını hesaplar; `RAGService.has_term_evidence()` bunu LLM çağrısından
