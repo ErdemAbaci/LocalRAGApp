@@ -214,6 +214,7 @@ class CliOutputTests(unittest.TestCase):
             "extractive": ("Doğrudan", MUTED_GREEN),
             "fallback_extractive": ("Kaynak metni", MUTED_AMBER),
             "no_evidence": ("Kanıt bulunamadı", "bright_black"),
+            "ungrounded": ("Cevap kaynağa dayanmıyor", "bright_black"),
         }
 
         self.assertEqual(ANSWER_MODE_STYLES, expected_modes)

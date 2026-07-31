@@ -165,9 +165,16 @@ class RAGServiceTests(unittest.TestCase):
             llm_factory=Mock(),
             term_evidence_threshold=0.50,
         )
+        # Gevşek serviste kapı geçildiği için akış üretken yola gider ve model
+        # gerçekten çağrılır; cevap context'ten yazılmalı, yoksa groundedness
+        # kapısı devreye girer ve test ölçmek istediği şeyi ölçmez.
+        class GroundedLLM:
+            def generate_answer(self, _messages):
+                return "Güvenlik olayı müdahalesi belgede anlatılır."
+
         lenient = RAGService(
             retrieval_func=lambda *_args, **_kwargs: chunks,
-            llm_factory=Mock(),
+            llm_factory=GroundedLLM,
             term_evidence_threshold=0.30,
         )
 
@@ -207,9 +214,13 @@ class RAGServiceTests(unittest.TestCase):
             "duvarı": 3.91,
             "kuralları": 2.30,
         }
+        # Eşik, ön kapının alan filtresine indirilmesinden önceki kalibrasyona
+        # sabitlenir; test edilen şey eşiğin değeri değil, ağırlıkların kapıya
+        # gerçekten ulaşması.
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: [chunk],
             llm_factory=Mock(),
+            term_evidence_threshold=0.60,
         )
 
         result = service.answer("Güvenlik duvarı kuralları nasıl olmalıdır?")
@@ -362,7 +373,15 @@ class RAGServiceTests(unittest.TestCase):
         self.assertIn("kaynak metin", result.warning)
         self.assertIsInstance(result.warning_error, RuntimeError)
 
-    def test_model_no_evidence_answer_falls_back_when_retrieval_has_evidence(self):
+    def test_model_no_evidence_answer_is_final(self):
+        """Modelin reddi kaynak metinle değiştirilmez.
+
+        Eski davranış bunu "arama doğru, LLM inatçı" varsayımıyla geçersiz
+        sayıyordu. Kapı alan filtresine indirildikten sonra o varsayım tersine
+        döner: kapsam dışı sorular artık modele ulaşıyor ve orada arama yanlış,
+        model haklıdır. Ölçümde `hard_negative_ransomware_tool` sorusunda
+        modelin doğru reddi silinip alakasız bir yedekleme cümlesi gösterildi.
+        """
         class RejectingLLM:
             def generate_answer(self, _messages):
                 return NO_EVIDENCE_ANSWER
@@ -386,11 +405,10 @@ class RAGServiceTests(unittest.TestCase):
 
         result = service.answer("3-2-1 kuralı nedir?")
 
-        self.assertEqual(result.mode, "fallback_extractive")
-        # Testin iddiası, modelin yanlış reddinin kaynak metinle değiştirildiği.
-        # İki parça da soruyla örtüştüğü için fallback ikisinden de cümle alabilir.
-        self.assertIn(evidence, result.answer)
-        self.assertIn("bulunan kanıtı kullanmadı", result.warning)
+        self.assertEqual(result.mode, "no_evidence")
+        self.assertEqual(result.answer, NO_EVIDENCE_ANSWER)
+        self.assertEqual(result.sources, ())
+        self.assertIsNone(result.warning)
 
     def test_activity_and_context_hooks_cover_all_stages(self):
         stages = []
@@ -403,7 +421,7 @@ class RAGServiceTests(unittest.TestCase):
 
         class GoodLLM:
             def generate_answer(self, _messages):
-                return "Dokumanlara dayali yeterince uzun ve gecerli cevap."
+                return "RAG, ilgili bilgiyi dokumanlardan bulur."
 
         chunks = [
             make_chunk(score=0.62, text="A" * 510, chunk_id=1, chunk_index=1),
@@ -431,7 +449,10 @@ class RAGServiceTests(unittest.TestCase):
         class CapturingLLM:
             def generate_answer(self, messages):
                 captured_messages.extend(messages)
-                return "Doküman sırasına dayalı yeterince uzun ve geçerli cevap."
+                return (
+                    "Başlangıç bölümü süreci tanıtır, "
+                    "sonuç bölümü süreci özetler."
+                )
 
         chunks = [
             make_chunk(
@@ -486,7 +507,10 @@ class RAGServiceTests(unittest.TestCase):
 
         class GoodLLM:
             def generate_answer(self, _messages):
-                return "Komşu bağlama dayalı yeterince uzun ve geçerli cevap."
+                return (
+                    "Ana süreç açıklaması önceki ve sonraki "
+                    "açıklamayla birlikte okunur."
+                )
 
         service = RAGService(
             retrieval_func=lambda *_args, **_kwargs: [matched],
@@ -538,8 +562,8 @@ class RAGServiceTests(unittest.TestCase):
         class StreamingLLM:
             def generate_answer_stream(self, _messages, on_update):
                 on_update("İlk parça")
-                on_update("Tam ve dokümana dayalı geçerli cevap metni.")
-                return "Tam ve dokümana dayalı geçerli cevap metni."
+                on_update("RAG, ilgili bilgiyi dokumanlardan bulur.")
+                return "RAG, ilgili bilgiyi dokumanlardan bulur."
 
         chunks = [
             make_chunk(score=0.62, text="A" * 510, chunk_id=1, chunk_index=1),
@@ -558,7 +582,7 @@ class RAGServiceTests(unittest.TestCase):
         self.assertEqual(result.mode, "generative")
         self.assertEqual(updates, [
             "İlk parça",
-            "Tam ve dokümana dayalı geçerli cevap metni.",
+            "RAG, ilgili bilgiyi dokumanlardan bulur.",
         ])
 
     def test_keyboard_interrupt_is_not_converted_to_fallback(self):

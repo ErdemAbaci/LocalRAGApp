@@ -155,11 +155,38 @@ Kaynak tablosu relevance sırasını korur ve komşuları ayrı rolle gösterir;
 prompt'u ise aynı parçaları kaynak, sayfa ve chunk düzenine göre okur. Böylece
 model sonuç paragrafını girişten önce görmez ve uzak konular prompt'u kirletmez.
 
-Retrieval yeterli kanıt bulduğu halde model tam kapsam dışı cümlesini döndürürse
-bu üretim geçerli sayılmaz. Servis, prompt context'indeki cümleleri soru
-terimleriyle karşılaştırır ve en çok örtüşen kaynak cümlelerine fallback yapar.
-Böylece en yüksek cosine skorlu chunk doğrudan cevabı içermese bile yanlış veya
-eksik bir kaynak metni gösterme riski azalır.
+Modelin "Bu bilgi verilen dokümanlarda yok." demesi **nihai cevaptır** ve
+kaynak metinle değiştirilmez. Eskiden bu bir üretim hatası sayılıp fallback
+tetikliyordu; varsayım "arama doğru, model inatçı"ydı. Kelime kanıtı kapısı
+alan filtresine indirildikten sonra kapsam dışı sorular modele ulaşıyor ve
+orada varsayım tersine dönüyor: arama yanlış, model haklı. Fallback yalnızca
+boş, çok kısa veya biçimsel olarak bozuk üretimlerde çalışır.
+
+### `app/groundedness.py`
+
+Üretilen cevabın verilen context'e dayanıp dayanmadığını **cümle bazlı** ölçer
+ve `generative` modda cevabı gösterilmeden önce çalışır; dayanaksızsa mod
+`ungrounded` olur.
+
+Bu modül, kelime kanıtı kapısının çöküşü üzerine eklendi. Kapı **sorunun**
+kelimelerini arıyordu ve 112 etiketli vakada ayrım boşluğu negatife döndü:
+meşru soru 0.27, tuzak soru 0.65. Sebep yapısaldır — kullanıcı soruyu kendi
+kelimeleriyle sorar, doküman konuyu kendi kelimeleriyle anlatır. Ölçülen örnek:
+soru "nasıl önlenir" der, doküman "önler" der ve ortak önek 5 karaktere
+ulaşmaz.
+
+Groundedness aynı soruyu **cevabın** üstünden sorar. Karşılaştırılan iki metin
+de kaynağın dilindedir, çünkü model cevabı context'ten okuyarak üretir; böylece
+kullanıcının kelime seçimi denklemden çıkar.
+
+Ölçüm neden cümle bazlı: cevabın tamamını tek blok saymak, beş dayanaklı
+cümlenin arasına sıkışmış tek bir uydurma cümleyi geçirir. Uydurma pratikte tam
+olarak böyle görünür.
+
+Kabul edilen sınır: kontrol "cevap context'e dayanıyor mu" diye sorar, "cevap
+soruyu yanıtlıyor mu" diye değil. Retrieval alakasız ama gerçek bir metin
+getirir ve model onu özetlerse cevap dayanaklı çıkar; o durumda tek savunma
+modelin kendi reddidir.
 
 ### `app/term_evidence.py`
 
@@ -353,6 +380,7 @@ Cevap renkleri dekorasyon için değil, durum bilgisini hızlı okutmak için ku
 | `extractive` | Doğrudan | Yumuşak yeşil | Güçlü ve kısa kaynak metni doğrudan kullanıldı. |
 | `fallback_extractive` | Kaynak metni | Yumuşak amber | LLM yerine güvenli kaynak metnine dönüldü. |
 | `no_evidence` | Kanıt bulunamadı | Gri | Soru için yeterli doküman kanıtı bulunamadı. |
+| `ungrounded` | Cevap kaynağa dayanmıyor | Gri | Model cevap üretti ama cümleleri context'te karşılık bulmadı. |
 
 Teknik mod adları normal kullanıcı görünümünde gösterilmez. Panel başlığı `Cevap · Üretken · Skor 0.6174`, süre satırı ise `Arama · Yanıt · Toplam` biçimindedir. Cevap paneli, kaynak tablosu ve süreler aynı sol hizayı kullanır.
 
@@ -441,7 +469,7 @@ Akış:
 Chunk ayarları:
 
 ```python
-CHUNK_SIZE = 110
+CHUNK_SIZE = 128
 CHUNK_OVERLAP = 20
 ```
 
@@ -576,15 +604,15 @@ python eval.py --update-baseline  # güncel metrikleri baseline olarak kaydet
 Son doğrulanan sonuç:
 
 ```text
-38/38 test başarılı
+39/39 test başarılı
 
-Recall@1 : 0.8636
-Recall@3 : 0.9773
+Recall@1 : 0.9783
+Recall@3 : 1.0000
 Recall@5 : 1.0000
-MRR      : 0.9318
+MRR      : 1.0000
 ```
 
-Yalnızca dense (hybrid search kapalı) ölçüm: `0.7273 / 0.8864 / 0.9545 / 0.8220`.
+Yalnızca dense (hybrid search kapalı) ölçüm: `0.7826 / 0.9565 / 0.9565 / 0.8551`.
 
 **Neden metrik gerekliydi?** Eski eval yalnızca `results[0]`'a bakıyor ve "doğru
 dosya geldi mi" diye soruyordu. `11/11 PASS` diyordu ama doğru chunk üç vakada
@@ -966,11 +994,11 @@ Son eval ve unit test çalışmasında:
 ```text
 24 chunk
 3 kaynak dosya
-38/38 eval testi başarılı (bilinen boşluk kalmadı)
+39/39 eval testi başarılı (bilinen boşluk kalmadı)
 237/237 unit testi başarılı
 
-Recall@1 = 0.8636   Recall@3 = 0.9773
-Recall@5 = 1.0000   MRR      = 0.9318
+Recall@1 = 0.9783   Recall@3 = 1.0000
+Recall@5 = 1.0000   MRR      = 1.0000
 ```
 
 Başarılı kontroller:
@@ -1095,7 +1123,7 @@ sıralamada kullanılır.** Kapı ve kullanıcıya gösterilen skor cosine kalı
 aksi halde dört eşiğin tamamı yeni bir ölçeğe göre yeniden kalibre edilmek
 zorunda kalırdı; tek değişkeni izole tutmak ölçümü mümkün kıldı.
 
-Sonuç: `Recall@1` 0.73 -> 0.86, `MRR` 0.82 -> 0.93. Manuel testte bozuk cevaba
+Sonuç: `Recall@1` 0.78 -> 0.98, `MRR` 0.86 -> 1.00. Manuel testte bozuk cevaba
 yol açan "Kimlik avından nasıl korunulur?" sorusunda cevabı içeren chunk 4.
 sıradan 1. sıraya çıktı.
 

@@ -14,6 +14,12 @@ Ayrıntılı öğretici anlatım için [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md),
 dış sunum için [`README.md`](README.md). `INSTRUCTIONS.md` ilk hedefleri tutar ve
 güncel gerçekliği yansıtmaz; ona göre karar verme.
 
+`AGENTS.md` artık bölünmüştür: eşik/chunking/hybrid search/kelime kanıtı
+kapısı kararlarının tam ölçüm geçmişi ve gerekçeleri `kalibrasyon-kaydi`
+skill'indedir. Eşiklere, retrieval'a, chunking'e, eval setine veya kelime
+kanıtı kapısına dokunmadan önce o skill'i çağır; `AGENTS.md` yalnızca özet
+tutar.
+
 ## Bu projenin asıl amacı öğrenmek
 
 Kullanıcı bu projeyle RAG ve AI uygulama geliştirmeyi öğreniyor. Bu, çıktının
@@ -75,7 +81,7 @@ kendin ürettiğini varsayma.
   fonksiyona da bağlamayı unutma, yoksa `--project` ve `LOCAL_RAG_HOME` o modül
   için sessizce çalışmaz. Yeni yol sabitini `tests/test_project.py` ile kapsa.
 
-- **`CHUNK_SIZE = 110` karakter değil token.** Embedding tokenizer'ının
+- **`CHUNK_SIZE = 128` karakter değil token.** Embedding tokenizer'ının
   offset mapping'i ile ölçülür ve özel tokenları da kapsar. Modelin sınırı 128
   tokendır. Bu değeri karakter sanıp büyütmek, gömülmeyen metin kuyruğu üretir.
 

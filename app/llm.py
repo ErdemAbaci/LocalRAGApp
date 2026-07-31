@@ -193,8 +193,15 @@ def get_answer_validation_error(answer):
 
     cleaned = answer.strip()
 
-    if cleaned.casefold() == NO_EVIDENCE_ANSWER.casefold():
-        return "false_no_evidence"
+    # Modelin `NO_EVIDENCE_ANSWER` üretmesi eskiden `false_no_evidence` sayılıp
+    # geçersiz kılınıyordu; varsayım "arama doğru, LLM inatçı"ydı. O varsayım
+    # kelime kanıtı kapısının LLM'den önce durduğu düzende savunulabilirdi.
+    # Kapı alan filtresine indirildikten sonra hard negative sorular modele
+    # ulaşıyor ve orada varsayım tersine dönüyor: arama yanlış, model haklı.
+    # Ölçülen sonucu buydu — `hard_negative_ransomware_tool` sorusunda modelin
+    # DOĞRU reddi silinip alakasız bir yedekleme cümlesi gösteriliyordu.
+    # Modelin reddi artık nihai cevaptır; `rag_service` bunu no_evidence olarak
+    # ele alır ve buraya hiç gelmez.
 
     if len(cleaned) < MIN_GENERATIVE_ANSWER_CHARS:
         return "too_short"

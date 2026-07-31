@@ -124,11 +124,17 @@ class AnswerCleaningTests(unittest.TestCase):
         self.assertFalse(has_excessive_repetition(answer))
         self.assertTrue(is_valid_answer(answer))
 
-    def test_no_evidence_phrase_is_not_a_valid_generated_answer(self):
-        self.assertFalse(is_valid_answer("Bu bilgi verilen dokümanlarda yok."))
-        self.assertEqual(
+    def test_no_evidence_phrase_is_a_valid_generated_answer(self):
+        """Modelin reddi artık geçersiz sayılmaz.
+
+        Eski davranış bunu `false_no_evidence` sayıp kaynak metne dönüyordu.
+        Kelime kanıtı kapısı alan filtresine indirildikten sonra hard negative
+        sorular modele ulaşıyor; orada modelin reddi DOĞRU cevaptır ve onu
+        ezmek ölçümde alakasız bir cümle göstermişti.
+        """
+        self.assertTrue(is_valid_answer("Bu bilgi verilen dokümanlarda yok."))
+        self.assertIsNone(
             get_answer_validation_error("Bu bilgi verilen dokümanlarda yok."),
-            "false_no_evidence",
         )
 
     def test_streaming_preview_hides_prefix_and_piece_citations(self):

@@ -22,6 +22,14 @@ de `sayı` kökünden gelir; aradaki anlam farkı türetme ekindedir ve saf morf
 bunu ayıramaz. Ölçümde bu ödünleşmeye rağmen ortak kök 5, iki grubu ayıran tek
 seçenek çıktı.
 
+Aynı sınırın ölçülen ikinci örneği: `yüzde` (oran) ile `yüzden` (bu yüzden).
+İkisi de `yüz` kökünün çekimidir — biri bulunma, diğeri ayrılma hali — ve ortak
+kökleri tam 5 karakterdir. Anlamları alakasız olmasına rağmen morfoloji bunları
+ayıramaz. `min_prefix` 6'ya çıkarılarak kapatılamaz: ölçümde 6, `korunulur` ~
+`korunmak`, `süreç` ~ `süreci` ve `aşamasında` ~ `aşama` gibi meşru eşleşmeleri
+kaybettiriyor. Bu tür çakışmalar kabul edilmiş bir maliyettir; kapıyı taşıyan
+şey tek bir kelime değil, IDF ağırlıklı toplamdır.
+
 Kalıcı çözüm terim ağırlıklandırmasıdır (BM25/IDF): oran bütün kelimeleri eşit
 sayar, oysa "sıklıkla" ile "yedekleme" aynı ağırlıkta olmamalıdır.
 
@@ -76,6 +84,14 @@ QUESTION_STOPWORDS = frozenset({
     # kelimeleri eşleşse bile kapsamayı eşiğin altına çekiyorlardı.
     "arasındaki", "arasında", "fark", "farkı", "farkları",
     "yazılmalıdır", "uygulanmalıdır", "tutulmalıdır", "seçilmelidir",
+    # "nasıl önlenir?" / "nasıl anlaşılır?" kalıbı. Manuel testte 217 chunk'lık
+    # korpusta iki meşru soru bu yüzden reddedildi: "Kilitlenme nedir ve nasıl
+    # önlenir?" (kapsama 0.42) ve "Aşırı öğrenme nasıl anlaşılır?" (0.60).
+    # Doküman "kilitlenmeyi önler" diyor ama `önler` ile `önlenir`in ortak öneki
+    # 4 karakter ve `min_prefix` 5; yani kelime hiçbir yerde eşleşmiyor ve en
+    # yüksek IDF ağırlığını (4.47) alıyor. Bir şeyin nasıl önlendiğini soran
+    # cevabın metinde "önlenir" kelimesini birebir içermesi gerekmez.
+    "önlenir", "önlenebilir", "anlaşılır", "anlaşılabilir",
 })
 
 

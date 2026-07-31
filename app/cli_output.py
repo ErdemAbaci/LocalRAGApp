@@ -35,6 +35,7 @@ ANSWER_MODE_STYLES = {
     "extractive": ("Doğrudan", MUTED_GREEN),
     "fallback_extractive": ("Kaynak metni", MUTED_AMBER),
     "no_evidence": ("Kanıt bulunamadı", "bright_black"),
+    "ungrounded": ("Cevap kaynağa dayanmıyor", "bright_black"),
 }
 
 CONTENT_PADDING = (0, 1)

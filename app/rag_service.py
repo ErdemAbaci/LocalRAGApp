@@ -9,6 +9,8 @@ from app.config import (
     CONTEXT_SCORE_THRESHOLD,
     CONTEXT_TERM_EVIDENCE_MIN,
     EXTRACTIVE_SCORE_THRESHOLD,
+    EXTRACTIVE_TERM_EVIDENCE_MIN,
+    GROUNDEDNESS_THRESHOLD,
     MAX_CONTEXT_CHUNKS,
     MAX_EXTRACTIVE_CHARS,
     NEIGHBOR_CHUNK_RADIUS,
@@ -19,6 +21,7 @@ from app.config import (
     TOP_K,
     USE_EXTRACTIVE_FALLBACK,
 )
+from app.groundedness import is_grounded
 from app.llm import LocalLLM, get_answer_validation_error
 from app.prompts import build_rag_messages
 from app.retrieval import gate_score, get_top_chunks
@@ -195,6 +198,8 @@ class RAGService:
         term_evidence_threshold=TERM_EVIDENCE_THRESHOLD,
         term_evidence_min_prefix=TERM_EVIDENCE_MIN_PREFIX,
         context_term_evidence_min=CONTEXT_TERM_EVIDENCE_MIN,
+        groundedness_threshold=GROUNDEDNESS_THRESHOLD,
+        extractive_term_evidence_min=EXTRACTIVE_TERM_EVIDENCE_MIN,
     ):
         self.retrieval_func = retrieval_func
         self.llm_factory = llm_factory
@@ -211,6 +216,8 @@ class RAGService:
         self.term_evidence_threshold = term_evidence_threshold
         self.term_evidence_min_prefix = term_evidence_min_prefix
         self.context_term_evidence_min = context_term_evidence_min
+        self.groundedness_threshold = groundedness_threshold
+        self.extractive_term_evidence_min = extractive_term_evidence_min
 
     def answer(
         self,
@@ -274,7 +281,16 @@ class RAGService:
             for chunk in matched_context_chunks
         )
 
-        if self.should_use_extractive_answer(matched_sources):
+        term_weights = chunks[0].get("question_term_weights")
+        use_extractive = self.should_use_extractive_answer(
+            matched_sources,
+        ) and self.has_extractive_term_evidence(
+            clean_question,
+            matched_context_chunks,
+            term_weights,
+        )
+
+        if use_extractive:
             prompt_chunks = matched_context_chunks
             source_chunks = matched_context_chunks
         else:
@@ -284,8 +300,6 @@ class RAGService:
                 matched_context_chunks,
             )
             source_chunks = expanded_chunks
-
-        term_weights = chunks[0].get("question_term_weights")
 
         if not self.has_term_evidence(clean_question, prompt_chunks, term_weights):
             return RAGResult(
@@ -313,7 +327,7 @@ class RAGService:
         warning_solution = None
         warning_error = None
 
-        if self.should_use_extractive_answer(matched_sources):
+        if use_extractive:
             answer = matched_sources[0].chunk_text
             mode = "extractive"
         else:
@@ -334,6 +348,47 @@ class RAGService:
 
         generation_seconds = self.clock() - generation_start
 
+        # Groundedness kontrolü yalnızca `generative` modda çalışır. `extractive`
+        # ve `fallback_extractive` chunk metnini birebir döndürür, yani inşası
+        # gereği dayanaklıdır; onları ölçmek her zaman 1.0 verir ve yalnızca
+        # kalibrasyonu yanıltır.
+        rejected_mode = None
+
+        if mode == "no_evidence":
+            rejected_mode = "no_evidence"
+        elif mode == "generative" and not self.is_grounded(answer, prompt_chunks):
+            rejected_mode = "ungrounded"
+        elif mode == "fallback_extractive" and not self.has_extractive_term_evidence(
+            clean_question,
+            prompt_chunks,
+            term_weights,
+        ):
+            # `fallback_extractive`, `extractive` ile AYNI iddiayı yapar: "bu
+            # kaynak metni cevaptır". Bu yüzden aynı kanıt şartını taşımalıdır.
+            # Groundedness burada işe yaramaz, çünkü metin zaten context'ten
+            # geliyor ve tanım gereği 1.0 alır — dayanaklı olmak alakalı olmak
+            # değildir. Manuel testte ölçülen sızıntı buydu: "Fidye yazılımının
+            # şifrelediği dosyaları çözmek için hangi araç kullanılır?" sorusuna
+            # model geçersiz bir üretim yaptı, akış fallback'e düştü ve alakasız
+            # bir yedekleme cümlesi cevap olarak gösterildi (kapsama 0.32).
+            rejected_mode = "no_evidence"
+
+        if rejected_mode is not None:
+            return RAGResult(
+                question=clean_question,
+                answer=NO_EVIDENCE_ANSWER,
+                mode=rejected_mode,
+                best_score=best_score,
+                sources=(),
+                timings=RAGTimings(
+                    retrieval_seconds=retrieval_seconds,
+                    generation_seconds=generation_seconds,
+                    total_seconds=self.clock() - total_start,
+                ),
+                source_filter=source_name,
+                prompt_messages=messages,
+            )
+
         return RAGResult(
             question=clean_question,
             answer=answer,
@@ -351,6 +406,45 @@ class RAGService:
             warning_error=warning_error,
             prompt_messages=messages,
         )
+
+    def has_extractive_term_evidence(self, question, chunks, weights=None):
+        """Extractive kısayolu için gereken güçlü kelime kanıtı.
+
+        Bu yol chunk metnini doğrudan cevap yapar; modelden de groundedness
+        kontrolünden de geçmez. Ön kapı alan filtresine indirilince ölçümde iki
+        hard negative tam buradan sızdı.
+
+        Kanıt yetersizse soru reddedilmez, yalnızca üretken yola düşer; kararı
+        orada model ve groundedness verir. Bu yüzden burada yüksek eşik
+        savunulabilir: yanlış reddin bedeli bir mod değişikliğidir, cevapsızlık
+        değil.
+        """
+        coverage = term_coverage(
+            question,
+            chunks,
+            min_prefix=self.term_evidence_min_prefix,
+            weights=weights,
+        )
+
+        if coverage is None:
+            return True
+
+        return coverage >= self.extractive_term_evidence_min
+
+    def is_grounded(self, answer, chunks):
+        """Üretilen cevap verilen context'e dayanıyor mu?
+
+        Kelime kanıtı kapısı **sorunun** kelimelerine bakar ve 112 etiketli
+        vakada ayırt ediciliğini kaybetti (meşru soru 0.27, tuzak 0.65). Sebep
+        yapısaldır: kullanıcı soruyu kendi kelimeleriyle sorar. Bu kontrol aynı
+        soruyu cevabın üstünden sorar; karşılaştırılan iki metin de kaynağın
+        dilindedir, çünkü model cevabı context'ten okuyarak üretir.
+
+        Bu kontrol generation'dan SONRA çalışır. Bedeli, kapsam dışı sorularda
+        da modelin çalışmasıdır; karşılığı, kapının hiç göremediği uydurma
+        cevabın yakalanmasıdır.
+        """
+        return is_grounded(answer, chunks, threshold=self.groundedness_threshold)
 
     def has_term_evidence(self, question, chunks, weights=None):
         """Sorunun kelimeleri seçilen context'te gerçekten geçiyor mu?
@@ -534,17 +628,18 @@ class RAGService:
                 error,
             )
 
+        # Model context'te cevap bulamadığını söylüyorsa bu nihai cevaptır.
+        # Eskiden geçersiz sayılıp kaynak metne dönülüyordu; ayrıntı ve ölçülen
+        # hata `app/llm.get_answer_validation_error()` içinde.
+        if generated_answer.strip().casefold() == NO_EVIDENCE_ANSWER.casefold():
+            return NO_EVIDENCE_ANSWER, "no_evidence", None, None
+
         validation_error = get_answer_validation_error(generated_answer)
         if validation_error is not None:
-            warning = "LLM cevabı yeterli bulunmadı; kaynak metin kullanıldı."
-            if validation_error == "false_no_evidence":
-                warning = (
-                    "LLM bulunan kanıtı kullanmadı; kaynak metin kullanıldı."
-                )
             return (
                 fallback_answer,
                 "fallback_extractive",
-                warning,
+                "LLM cevabı yeterli bulunmadı; kaynak metin kullanıldı.",
                 None,
             )
 

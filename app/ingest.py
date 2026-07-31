@@ -10,7 +10,30 @@ from app.index_state import build_source_manifest, list_document_paths
 
 
 DOCS_DIR = Path("docs")
-CHUNK_SIZE = 110
+
+# Embedding modelinin sert sınırı 128 tokendır ve bu bütçe özel tokenları da
+# kapsar; `split_long_text` sınırı hiçbir zaman aşmaz, bu yüzden 128 tam sınıra
+# oturur ve kırpılma olmaz. Başka bir embedding modeline geçilirse bu değer
+# yeniden kontrol edilmelidir.
+#
+# `tools/chunking_analysis.py`, 22 etiketli vaka (indekse dokunmadan ölçüldü):
+#
+#   boyut/overlap  chunk   R@1      R@3      R@5      MRR
+#   60/12             77   0.5000   0.6364   0.6364   0.5530
+#   80/16             53   0.6818   0.7727   0.7727   0.7197
+#   110/20            47   0.8636   0.9773   1.0000   0.9318
+#   120/20            43   0.9318   1.0000   1.0000   0.9773
+#   128/12,20,30      38   0.9773   1.0000   1.0000   1.0000
+#
+# İki okuma notu:
+#   - 60 ve 80 satırları retrieval kalitesi değildir. `R@5` bile 1.0'ın altında
+#     çünkü eval imzaları "bu terimlerin hepsi aynı chunk'ta" der; küçük chunk
+#     cevabı bölünce imza karşılanamaz hale gelir. Ölçüm yönteminin yanlılığıdır.
+#     110/120/128'de `R@5 = 1.0`, yani aradaki fark gerçek sıralama farkıdır.
+#   - Overlap'in ölçülebilir etkisi yok (12/20/30 birebir aynı). Bölme paragraf
+#     bazlı olduğu için overlap nadiren devreye giriyor. 20 korundu; ölçümde
+#     ayırt edilemeyen bir parametreyi değiştirmek gürültüye uymaktır.
+CHUNK_SIZE = 128
 CHUNK_OVERLAP = 20
 SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)")
 

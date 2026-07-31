@@ -3,7 +3,7 @@ import json
 import math
 from pathlib import Path
 
-from app.config import SIMILARITY_THRESHOLD, TOP_K
+from app.config import NO_EVIDENCE_ANSWER, SIMILARITY_THRESHOLD, TOP_K
 from app.database import get_all_chunks, get_chunk_stats
 from app.eval_metrics import (
     build_case_metrics,
@@ -17,10 +17,6 @@ from app.llm import is_valid_answer
 from app.rag_service import RAGService
 from app.retrieval import gate_score, get_top_chunks
 from app.term_evidence import term_coverage
-
-
-class LLMShouldNotLoadError(AssertionError):
-    pass
 
 
 EVAL_CASES_PATH = Path(__file__).with_name("eval_cases.json")
@@ -37,7 +33,10 @@ ANSWER_QUALITY_CASES = [
     ("", False),
     ("Kısa cevap", False),
     ("Kaynak: [Parça 1-3]", False),
-    ("Bu bilgi verilen dokümanlarda yok.", False),
+    # Modelin reddi artık geçerli bir cevaptır ve `rag_service` onu no_evidence
+    # olarak ele alır. Eskiden `false_no_evidence` sayılıp kaynak metinle
+    # değiştiriliyordu; ölçümde bu, modelin DOĞRU reddini siliyordu.
+    (NO_EVIDENCE_ANSWER, True),
     ("Gönderinin " * 18, False),
     ("Veri madenciliği, verilerden anlamlı bilgi çıkarma sürecidir.", True),
 ]
@@ -203,35 +202,86 @@ def evaluate_relevant_case(case, results):
     return True, detail
 
 
+class RefusingLLM:
+    """Context'te cevap bulamadığını doğru biçimde söyleyen model."""
+
+    def generate_answer(self, _messages):
+        return NO_EVIDENCE_ANSWER
+
+
+class FabricatingLLM:
+    """Context'le ilgisi olmayan bir cevap uyduran model."""
+
+    def generate_answer(self, _messages):
+        return (
+            "Çikolatalı kek fırında pişirilir ve hamura kabartma tozu "
+            "eklenmelidir. Kekin üzerine pudra şekeri serpilir."
+        )
+
+
+class FailingLLM:
+    """Geçersiz üretim yapan model; akış `fallback_extractive`e düşer.
+
+    Bu dal manuel testte sızdırdı ve o zamana kadar hiç sınanmamıştı: model
+    bozuk bir cevap üretti, sistem kaynak metnine döndü ve alakasız bir cümleyi
+    cevap olarak gösterdi. Groundedness bu yolu koruyamaz, çünkü metin zaten
+    context'ten gelir ve tanım gereği dayanaklıdır.
+    """
+
+    def generate_answer(self, _messages):
+        return "Kısa."
+
+
 def evaluate_answer_mode(case):
     """Kullanıcının gerçekte aldığı kararı doğrular.
 
-    Retrieval skoru tek başına yeterli değildir: konusu dokümana yakın ama
-    cevabı dokümanda olmayan sorular similarity eşiğini geçebiliyor. Asıl
-    soru, sistemin sonunda ne cevap verdiğidir. Bu kontrol gerçek retrieval
-    ile `RAGService`i çalıştırır ve LLM yüklenirse hata verir; kanıtsız bir
-    soruda model hiç çağrılmamalıdır.
+    Eskiden bu kontrol LLM yüklenirse hata verirdi; kelime kanıtı kapısı
+    kanıtsız soruyu modele hiç göndermiyordu. Kapı alan filtresine
+    indirildikten sonra o varsayım geçersiz: hard negative sorular artık
+    **kasıtlı olarak** modele ulaşır ve karar cevaba bakılarak verilir.
+
+    Bu, kararın bir kısmını deterministik olmaktan çıkarır — gerçek modelin
+    reddedip reddetmeyeceğini eval ölçemez. Ölçebileceği şey bizim tarafımızın
+    sözleşmesidir ve iki dalı da burada sınanır:
+
+    - Model doğru davranıp reddederse bu red NİHAİ olmalı. Eski `false_no_evidence`
+      koruması tam burada modelin doğru reddini siliyordu.
+    - Model uydurursa groundedness kapısı cevabı `ungrounded` ile kesmeli.
+
+    Gerçek modelin hangi dala gireceği manuel testin konusudur; AGENTS.md
+    bölüm 9'daki soru listesi bunun içindir.
     """
     expected_mode = case["expect_answer_mode"]
 
-    def guard_llm_factory():
-        raise LLMShouldNotLoadError(
-            "Kanıtsız soruda LLM yüklendi; kapı çalışmadı."
-        )
+    refused = RAGService(llm_factory=RefusingLLM).answer(case["question"])
 
-    service = RAGService(llm_factory=guard_llm_factory)
-
-    try:
-        result = service.answer(case["question"])
-    except LLMShouldNotLoadError as error:
-        return False, str(error)
-
-    if result.mode != expected_mode:
+    if refused.mode != expected_mode:
         return False, (
-            f"cevap modu={result.mode}, beklenen={expected_mode}"
+            f"model reddettiğinde mod={refused.mode}, beklenen={expected_mode}"
         )
 
-    return True, f"cevap modu={result.mode}, LLM çağrılmadı"
+    if refused.sources:
+        return False, "reddedilen cevapta kaynak gösterildi"
+
+    fabricated = RAGService(llm_factory=FabricatingLLM).answer(case["question"])
+
+    if fabricated.mode not in ("no_evidence", "ungrounded"):
+        return False, (
+            f"model uydurduğunda mod={fabricated.mode}, "
+            "beklenen no_evidence veya ungrounded"
+        )
+
+    failed = RAGService(llm_factory=FailingLLM).answer(case["question"])
+
+    if failed.mode != "no_evidence":
+        return False, (
+            f"model bozuk üretince mod={failed.mode}, beklenen no_evidence"
+        )
+
+    return True, (
+        f"red -> {refused.mode}, uydurma -> {fabricated.mode}, "
+        f"bozuk -> {failed.mode}"
+    )
 
 
 def evaluate_not_found_case(case, results):

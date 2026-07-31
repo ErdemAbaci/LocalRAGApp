@@ -108,7 +108,7 @@ karakter saymaktan farklıdır.
 Projedeki ayarlar:
 
 ```python
-CHUNK_SIZE = 110      # token, karakter değil
+CHUNK_SIZE = 128      # token, karakter değil
 CHUNK_OVERLAP = 20    # token
 ```
 
@@ -308,7 +308,7 @@ ile 0.30 arasındaki farkla aynı sayılır. Bu yüzden ikinci bir karar verildi
 **birleşik skor yalnızca sıralamada kullanılır**, eşik karşılaştırmalarında ve
 kullanıcıya gösterimde cosine skoru kalır.
 
-Ölçülen sonuç: `Recall@1` 0.73 -> 0.86, `MRR` 0.82 -> 0.93.
+Ölçülen sonuç: `Recall@1` 0.78 -> 0.98, `MRR` 0.86 -> 1.00.
 
 RRF'in `k` sabiti sezgisel değil. İki listenin birden gördüğü chunk, her k
 değerinde tek listenin gördüğünün önüne geçer. k'nın belirlediği şey, bir listede
@@ -370,8 +370,8 @@ Recall@5 : 1.0000
 MRR      : 0.8333
 ```
 
-Güncel değerler (hybrid search sonrası, 22 etiketli vaka):
-`Recall@1 = 0.8636`, `Recall@3 = 0.9773`, `Recall@5 = 1.0000`, `MRR = 0.9318`.
+Güncel değerler (hybrid search sonrası, 23 etiketli vaka):
+`Recall@1 = 0.9783`, `Recall@3 = 1.0000`, `Recall@5 = 1.0000`, `MRR = 1.0000`.
 
 Bu tablo, eski eval'in neden yetersiz olduğunun kanıtıdır. Eski eval `11/11 PASS`
 diyordu çünkü yalnızca "doğru dosya geldi mi" diye soruyordu. Recall@1'in 0.6667

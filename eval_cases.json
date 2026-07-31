@@ -396,11 +396,18 @@
     "expect_answer_mode": "no_evidence"
   },
   {
-    "name": "hard_negative_coverage_target",
+    "name": "coverage_not_a_target",
     "question": "Kod kapsamı yüzde kaç olmalıdır?",
-    "expectation": "not_found",
-    "difficulty": "hard",
-    "expect_answer_mode": "no_evidence"
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "hedef sayı olarak değil",
+        "harita olarak"
+      ]
+    ],
+    "note": "Önce hard negative olarak yazılmıştı; yanlıştı. Doküman soruyu yanıtlıyor: bir yüzde vermiyor ama kapsamın hedef sayı olarak kullanılmamasını söylüyor. Doğru davranış reddetmek değil bunu bulmaktır."
   },
   {
     "name": "hard_negative_test_library",
@@ -408,5 +415,1162 @@
     "expectation": "not_found",
     "difficulty": "hard",
     "expect_answer_mode": "no_evidence"
+  },
+  {
+    "name": "hard_negative_coverage_tool",
+    "question": "Kod kapsamı ölçümü hangi araçla yapılır?",
+    "expectation": "not_found",
+    "difficulty": "hard",
+    "expect_answer_mode": "no_evidence",
+    "note": "Doküman kapsamın ne olduğunu anlatır ama hiçbir araç adı geçmez."
+  },
+  {
+    "name": "network_layered_model",
+    "question": "Bilgisayar ağlarında katmanlı tasarımın değeri nedir?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "kablosuz bir bağlantıya geçmek",
+        "Katmanlar arasındaki sözleşme arayüzdür"
+      ]
+    ]
+  },
+  {
+    "name": "network_link_layer_checksum",
+    "question": "Bağlantı katmanı bozulan çerçeveleri nasıl denetler?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "sağlama toplamıyla denetler",
+        "bozulmuş çerçeveyi sessizce atar"
+      ]
+    ]
+  },
+  {
+    "name": "network_routing_table",
+    "question": "Yönlendirici bir paketi nasıl bir sonraki adıma yönlendirir?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "yönlendirme tablosuna bakarak",
+        "yalnızca bir sonraki adım belirlenir"
+      ]
+    ]
+  },
+  {
+    "name": "network_dns_distributed",
+    "question": "Alan adı sistemi neden dağıtık bir dizin olarak tasarlanmıştır?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "dağıtık bir dizindir",
+        "tek arıza noktası"
+      ]
+    ]
+  },
+  {
+    "name": "network_packet_vs_circuit_switching",
+    "question": "Paket anahtarlama kaynakları neden devre anahtarlamadan daha verimli kullanır?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "uçtan uca ayrılmış bir yol",
+        "sessiz anlarda hat boşa harcanmaz"
+      ]
+    ]
+  },
+  {
+    "name": "network_bufferbloat",
+    "question": "Tampon şişmesi neden etkileşimli uygulamaları yavaşlatır?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Tampon şişmesi denilen bu durum",
+        "etkileşimli uygulamaların yavaş hissettirmesinin yaygın nedenidir"
+      ]
+    ]
+  },
+  {
+    "name": "os_process_isolation",
+    "question": "Bir sürecin çökmesi neden diğer süreçleri etkilemez?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "bir sürecin çökmesi diğerlerini etkilemez",
+        "bir süreç diğerinin belleğini doğrudan okuyamaz"
+      ]
+    ]
+  },
+  {
+    "name": "os_context_switch_cost",
+    "question": "Bağlam değiştirme sırasında önbellekteki sıcak veriler neden anlamsız hale gelir?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "yazmaçlar kaydedilir",
+        "önbellekteki sıcak veriler yeni görev için anlamsız hale gelir"
+      ]
+    ]
+  },
+  {
+    "name": "os_page_fault",
+    "question": "Sayfa hatası oluştuğunda işletim sistemi ne yapar?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "sayfa hatası oluşur",
+        "Sayfa hatası bir hata değil normal bir mekanizmadır"
+      ]
+    ]
+  },
+  {
+    "name": "os_deadlock_conditions",
+    "question": "Kilitlenmenin oluşması için hangi koşullar gerekir?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "karşılıklı dışlama, elde tutup bekleme",
+        "dairesel bekleme"
+      ]
+    ]
+  },
+  {
+    "name": "os_filesystem_metadata",
+    "question": "Dosya sisteminde dosya silindiğinde veri gerçekten silinir mi?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "üstveri tutulur",
+        "bloğu boş olarak işaretler"
+      ]
+    ]
+  },
+  {
+    "name": "os_container_vs_vm",
+    "question": "Konteynerler sanal makinelerden hangi açıdan farklıdır?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "aynı çekirdeği paylaşırlar",
+        "dosya sistemi, ağ ve süreç görünürlüğü düzeyinde yalıtım sağlarlar"
+      ]
+    ]
+  },
+  {
+    "name": "ds_array_vs_linked_list",
+    "question": "Dizinin bağlı listeye göre önbellek yerelliği avantajı nedir?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "önbellek yerelliğinden en iyi biçimde yararlanır",
+        "sonraki bütün elemanları kaydırmayı"
+      ]
+    ]
+  },
+  {
+    "name": "ds_hash_table_collision",
+    "question": "Karma tablosunda iki anahtarın aynı konuma düşmesi nasıl çözülür?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "zincirleme veya açık adresleme",
+        "tablo belirli bir doluluğa ulaştığında"
+      ]
+    ]
+  },
+  {
+    "name": "ds_balanced_tree_degradation",
+    "question": "Sıralı veri eklendiğinde dengesiz bir ikili arama ağacına ne olur?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "sıralı veri eklendiğinde ağaç bir bağlı listeye dönüşür",
+        "yüksekliği denetim altında"
+      ]
+    ]
+  },
+  {
+    "name": "ds_graph_representation",
+    "question": "Komşuluk matrisi ile komşuluk listesi arasındaki fark nedir?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Komşuluk matrisi",
+        "Komşuluk listesi"
+      ]
+    ]
+  },
+  {
+    "name": "ds_dynamic_programming",
+    "question": "Dinamik programlama üstel maliyeti nasıl azaltır?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "üstel maliyeti polinom maliyete indirir",
+        "alt problemler örtüşmeli"
+      ]
+    ]
+  },
+  {
+    "name": "ds_space_time_tradeoff",
+    "question": "Yer ve zaman ödünleşiminde önbellekleme ne sağlar?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Önbellekleme, ön hesaplama tabloları",
+        "sıkıştırıp her erişimde açmak"
+      ]
+    ]
+  },
+  {
+    "name": "db_normalization_anomalies",
+    "question": "Normalleştirme yapılmazsa hangi anormallikler ortaya çıkar?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "güncelleme anormallikleridir",
+        "daha fazla tablo birleştirmesi"
+      ]
+    ]
+  },
+  {
+    "name": "db_composite_index_order",
+    "question": "Bileşik indekste sütun sırası neden önemlidir?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "soldan başlayarak sürekli bir önek",
+        "ilk sütun sorguda kullanılmıyorsa"
+      ]
+    ]
+  },
+  {
+    "name": "db_acid_guarantees",
+    "question": "İşlemlerin klasik dört güvencesi nelerdir?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "bölünmezlik, tutarlılık, yalıtım ve kalıcılıktır"
+      ]
+    ]
+  },
+  {
+    "name": "db_mvcc",
+    "question": "Çok sürümlü eşzamanlılık denetimi okuma ve yazmayı nasıl birbirinden ayırır?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "yeni bir sürüm oluşturur",
+        "okuma yazmayı, yazma okumayı engellemez"
+      ]
+    ]
+  },
+  {
+    "name": "db_write_ahead_log",
+    "question": "Yazma öncesi günlük kalıcılığı nasıl sağlar?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "rastgele disk yazmalarını sıralı yazmalara",
+        "diske güvenli biçimde yazılmadan"
+      ]
+    ]
+  },
+  {
+    "name": "db_vertical_horizontal_scaling",
+    "question": "Dikey ölçekleme ile yatay ölçekleme arasındaki fark nedir?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Dikey ölçekleme, tek bir makineyi güçlendirmektir",
+        "Yatay ölçekleme veriyi birden çok makineye dağıtır"
+      ]
+    ]
+  },
+  {
+    "name": "ml_overfitting_signs",
+    "question": "Aşırı öğrenmenin belirtisi nedir?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "eğitim başarımı yüksek, görülmemiş veride başarım düşüktür",
+        "düzenlileştirme uygulamak"
+      ]
+    ]
+  },
+  {
+    "name": "ml_bias_variance_tradeoff",
+    "question": "Yanlılık ve değişkenlik modelin hatasına nasıl katkıda bulunur?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "modelin problemin gerçek yapısını yakalayamayacak kadar basit olmasından",
+        "küçük değişimlere aşırı duyarlı olmasıdır"
+      ]
+    ]
+  },
+  {
+    "name": "ml_cross_validation",
+    "question": "Model değerlendirmesinde çapraz doğrulama veriyi nasıl kullanır?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "veriyi eşit parçalara böler",
+        "sonuçların ortalamasını alır"
+      ]
+    ]
+  },
+  {
+    "name": "ml_precision_recall",
+    "question": "Kesinlik ile duyarlılık ne ölçer?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "pozitif dediklerimizin ne kadarının gerçekten pozitif olduğunu",
+        "gerçek pozitiflerin ne kadarını yakaladığımızı"
+      ]
+    ]
+  },
+  {
+    "name": "ml_data_leakage",
+    "question": "Öznitelik mühendisliğinde veri sızıntısı nedir?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "en yaygın ve en sinsi hata veri sızıntısıdır",
+        "tahmin anında gerçekte mevcut olmayacak"
+      ]
+    ]
+  },
+  {
+    "name": "ml_model_drift",
+    "question": "Üretimdeki bir model neden zamanla kötüleşir?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "bu olguya kayma denir",
+        "izlemenin başlangıcıdır"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_subword_tokenization",
+    "question": "Alt kelime birimlerine bölen belirteçleme yöntemi neyi sağlar?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Alt kelime birimlerine bölen yöntemler",
+        "hiç görülmemiş kelimeler bile temsil edilebilir"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_turkish_agglutinative",
+    "question": "Türkçenin eklemeli yapısı kök bulmayı nasıl zorlaştırır?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Türkçe eklemeli bir dildir",
+        "Ünlü uyumu eklerin biçimini değiştirir"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_tfidf_weighting",
+    "question": "Bir kelime belgede sık ve koleksiyonda nadir olduğunda terim ağırlığı nasıl artar?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Terim sıklığı ile ters belge sıklığının çarpımına dayanan ağırlıklandırma"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_attention_mechanism",
+    "question": "Dikkat mekanizması uzun mesafeli ilişkileri nasıl yakalar?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "her konum, dizideki bütün konumlara doğrudan bakabilir",
+        "hesaplama maliyetinin dizi uzunluğunun karesiyle"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_hybrid_search_rank_fusion",
+    "question": "Anlamsal ve sözcüksel arama skorları nasıl birleştirilir?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Sıra numaralarını birleştiren yöntemler",
+        "ölçekten bağımsız hâle getirerek"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_eval_set_hard_negatives",
+    "question": "Bir değerlendirme kümesine zor olumsuz örnekler eklemek neden gereklidir?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Cevabı kasıtlı olarak belgelerde bulunmayan zor olumsuz örnekler",
+        "uydurma cevap üretme eğilimini"
+      ]
+    ]
+  },
+  {
+    "name": "arch_coupling_cohesion",
+    "question": "Yazılım mimarisinde düşük bağlaşım ve yüksek uyum neden hedeftir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Hedef her zaman düşük bağlaşım ve yüksek uyumdur"
+      ]
+    ]
+  },
+  {
+    "name": "arch_dependency_direction",
+    "question": "Katmanlı bir sistemde bağımlılıkların tek yönde akması neden önemlidir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "iş kuralları, veritabanı ve arayüz gibi ayrıntılara bağımlı olmamalıdır",
+        "tersi doğru olmalıdır"
+      ]
+    ]
+  },
+  {
+    "name": "arch_hexagonal_testability",
+    "question": "Altıgen mimaride çekirdeğin dış dünyadan ayrılması ne kazandırır?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "çekirdeğin gerçek altyapı olmadan test edilebilmesi"
+      ]
+    ]
+  },
+  {
+    "name": "arch_circuit_breaker",
+    "question": "Devre kesici deseni sürekli başarısız olan bir bağımlılığa nasıl davranır?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Devre kesici deseni",
+        "hızlıca başarısız olmasını sağlar"
+      ]
+    ]
+  },
+  {
+    "name": "arch_technical_debt",
+    "question": "Teknik borç ödenmediğinde ne olur?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "tasarım ödünlerine teknik borç denir",
+        "faiziyle birlikte büyümesi kötüdür"
+      ]
+    ]
+  },
+  {
+    "name": "arch_premature_generalization",
+    "question": "Henüz var olmayan ihtiyaçlar için esneklik eklemek neden risklidir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Henüz var olmayan ihtiyaçlar için esneklik eklemek"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_false_assumptions",
+    "question": "Dağıtık sistemlere yeni başlayanların sıkça yaptığı yanlış varsayımlar nelerdir?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "ağın güvenilir olduğu, gecikmenin sıfır olduğu"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_consensus_majority",
+    "question": "Uzlaşma protokolleri neden çoğunluk ilkesine dayanır?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "çoğunluk ilkesine dayanır",
+        "düğümlerin yarısından fazlası kabul ettiğinde kesinleşir"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_partitioning_key_range_vs_hash",
+    "question": "Anahtar aralığına göre bölümleme ile karma değerine göre bölümleme nasıl farklılaşır?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Anahtar aralığına göre bölümleme",
+        "karma değerine göre bölümleme"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_message_delivery_guarantees",
+    "question": "En fazla bir kez teslim ile en az bir kez teslim arasındaki fark nedir?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "En fazla bir kez teslimde mesaj kaybolabilir",
+        "En az bir kez teslimde mesaj asla kaybolmaz"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_graceful_degradation",
+    "question": "Aşırı yük altında zarif bozulma stratejisi ne yapar?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Kritik olmayan özellikleri geçici olarak kapatmak",
+        "isteklere hız sınırı uygulamak"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_distributed_tracing",
+    "question": "Dağıtık iz sürme uçtan uca zaman çizelgesini nasıl çıkarır?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "isteğe bir kimlik atar",
+        "yüzdelik dilimler ortalamadan daha bilgilendiricidir"
+      ]
+    ]
+  },
+  {
+    "name": "network_transport_reliability",
+    "question": "Bağlantı temelli taşıma protokolü hangi güvenceleri sağlar?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "onaylarla doğrular",
+        "doğru sırada birleştirir"
+      ]
+    ]
+  },
+  {
+    "name": "network_latency_vs_bandwidth",
+    "question": "Gecikme ile bant genişliği neden farklı kavramlardır?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Bant genişliği birim zamanda taşınabilen veri miktarıdır",
+        "gecikmeyi azaltmaksa fizik kurallarıyla sınırlıdır"
+      ]
+    ]
+  },
+  {
+    "name": "os_thread_vs_process",
+    "question": "Süreç oluşturmak neden iş parçacığı oluşturmaktan daha pahalıdır?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Süreç oluşturmak iş parçacığı oluşturmaktan belirgin biçimde pahalıdır",
+        "yeni bir adres alanı kurulması gerekir"
+      ]
+    ]
+  },
+  {
+    "name": "os_journaling_consistency",
+    "question": "Günlüklü dosya sistemleri çökme sonrası tutarlılığı nasıl sağlar?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "önce bir günlüğe yazar",
+        "yarım kalan işlemler tamamlanır veya geri alınır"
+      ]
+    ]
+  },
+  {
+    "name": "ds_stack_vs_queue",
+    "question": "Yığın ile kuyruk veriyi hangi sırayla işler?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Yığın, son giren ilk çıkar kuralıyla çalışır",
+        "Kuyruk ise ilk giren ilk çıkar kuralıyla çalışır"
+      ]
+    ]
+  },
+  {
+    "name": "ds_greedy_algorithm",
+    "question": "Açgözlü algoritma neden her problemde doğru sonuç vermez?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Açgözlü algoritma her adımda o an en iyi görünen seçimi yapar ve geri dönmez",
+        "doğruluğu ancak problemin yapısı buna izin verdiğinde kanıtlanabilir"
+      ]
+    ]
+  },
+  {
+    "name": "db_foreign_key_integrity",
+    "question": "Yabancı anahtar referans bütünlüğünü kim denetler?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Yabancı anahtar ise başka bir tablonun birincil anahtarına yapılan referanstır",
+        "olmayan bir satıra referans veren kayıt yazılamaz"
+      ]
+    ]
+  },
+  {
+    "name": "db_deadlock_detection",
+    "question": "Veritabanı çıkmaz durumunu nasıl çözer?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "İki işlem birbirinin kilitlediği satırı beklediğinde ilerleme durur",
+        "işlemlerden birini iptal ederek düğümü çözer"
+      ]
+    ]
+  },
+  {
+    "name": "db_replication_recovery_point",
+    "question": "Eşzamanlı kopyalama ile gecikmeli kopyalama arasındaki ödünleşim nedir?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "eşzamanlı kopyalama veri kaybını sıfıra yaklaştırır ama her yazmayı yavaşlatır",
+        "gecikmeli kopyalama hızlıdır ama ani bir arızada son yazmalar kaybolabilir"
+      ]
+    ]
+  },
+  {
+    "name": "ml_train_val_test_split",
+    "question": "Test kümesine bakarak model kararı vermek neden yanlıştır?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Test kümesine bakarak karar vermek, onu sessizce doğrulama kümesine dönüştürür",
+        "nihai ölçümün tarafsızlığını yok eder"
+      ]
+    ]
+  },
+  {
+    "name": "ml_ensemble_methods",
+    "question": "Topluluk yöntemleri tek bir karar ağacının aşırı öğrenme sorununu nasıl azaltır?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Tek bir ağaç kolayca aşırı öğrenir",
+        "Topluluk yöntemleri çok sayıda zayıf modeli birleştirerek bu sorunu azaltır"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_stemming_lemmatization",
+    "question": "Gövdeleme ile sözlük tabanlı kök bulma arasındaki fark nedir?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Gövdeleme, kelimenin sonundaki ekleri kurallı biçimde atarak ortak bir gövdeye ulaşmayı hedefler",
+        "Sözlük tabanlı kök bulma ise dilbilgisel olarak doğru kökü verir"
+      ]
+    ]
+  },
+  {
+    "name": "nlp_repetition_generation",
+    "question": "Metin üretiminde tekrar döngüsü ne zaman tespit edilip kesilmelidir?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Modelin aynı ifadeyi döngüye girip tekrarlaması yaygın bir bozulma biçimidir",
+        "üretim bittikten sonra değil, üretim sırasında saptanıp kesilmelidir"
+      ]
+    ]
+  },
+  {
+    "name": "arch_monolith_vs_microservices",
+    "question": "Mikroservislere geçmenin bedeli nedir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Mikroservisler ise sistemi bağımsız dağıtılabilen parçalara böler",
+        "ağ gecikmesi, kısmi arızalar, dağıtık hata ayıklama ve veri tutarlılığı sorunları gelir"
+      ]
+    ]
+  },
+  {
+    "name": "arch_observability_pillars",
+    "question": "Günlükler, ölçütler ve izler gözlemlenebilirlikte nasıl farklı roller oynar?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Günlükler tekil olayları anlatır, ölçütler zaman içindeki eğilimi gösterir",
+        "izler ise bir isteğin bileşenler arasındaki yolculuğunu takip eder"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_leader_replication_risk",
+    "question": "Lider düğüm arızalandığında yazma işlemlerine ne olur?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Riski, liderin arızalanmasıdır",
+        "yeni lider seçilene kadar yazmalar durur"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_idempotency",
+    "question": "Etkisiz tekrar özelliği neden koordinasyonsuz tasarımların anahtarıdır?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Bir işlemin birden çok kez uygulanmasının tek kez uygulanmasıyla aynı sonucu vermesi",
+        "etkisiz tekrar özelliği, bu tasarımların anahtarıdır"
+      ]
+    ]
+  },
+  {
+    "name": "distsys_cache_consistency",
+    "question": "Önbellekteki bir kayıt aynı anda birçok istemci tarafından kaçırıldığında ne olur?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Önbellekteki bir kayıt aynı anda birçok istemci tarafından kaçırıldığında",
+        "tam da kaynağın en zorlandığı anda ek yük üretir"
+      ]
+    ]
+  },
+  {
+    "name": "sqlite_definition",
+    "question": "SQLite ne tür bir veritabanıdır?",
+    "expectation": "relevant",
+    "expected_source": "example.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "yerel ve hafif bir veritabanı",
+        "Sunucu gerektirmez"
+      ]
+    ]
+  },
+  {
+    "name": "foundry_local_definition",
+    "question": "Foundry Local ne işe yarar?",
+    "expectation": "relevant",
+    "expected_source": "example.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "cihaz üzerinde local LLM çalıştırmayı sağlar",
+        "cloud servisine gitmeden"
+      ]
+    ]
+  },
+  {
+    "name": "data_integration",
+    "question": "Veri bütünleştirme aşamasında farklı kaynaklardaki veriler ne yapılır?",
+    "expectation": "relevant",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "farklı kaynaklardan elde edilen verilerin tek bir veri setinde birleştirilmesi"
+      ]
+    ]
+  },
+  {
+    "name": "data_reduction",
+    "question": "Veri indirgeme veri setinin boyutunu nasıl küçültür?",
+    "expectation": "relevant",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Veri indirgeme, veri setinin boyutunu küçültme işlemidir",
+        "korunmaya çalışılır"
+      ]
+    ]
+  },
+  {
+    "name": "test_purpose_limit",
+    "question": "Bir test hatanın yokluğunu kanıtlayabilir mi?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "Test, hataların varlığını kanıtlayabilir ancak yokluğunu kanıtlayamaz"
+      ]
+    ]
+  },
+  {
+    "name": "test_maintainability",
+    "question": "Bir davranış değiştiğinde çok sayıda testin aynı anda kırılması ne anlama gelir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "Bir davranış değiştiğinde çok sayıda testin aynı anda kırılması",
+        "testlerin uygulamanın iç yapısına gereğinden fazla bağlandığını gösterir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_deadlock_prevention",
+    "question": "Kilitlenme nasıl önlenir?",
+    "expectation": "relevant",
+    "expected_source": "isletim_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "kaynakların her zaman aynı sırayla alınmasını zorunlu kılmaktır",
+        "dairesel beklemeyi tasarımdan siler"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_overfitting_detection",
+    "question": "Aşırı öğrenme nasıl anlaşılır?",
+    "expectation": "relevant",
+    "expected_source": "makine_ogrenmesi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "eğitim başarımı yüksek, görülmemiş veride başarım düşüktür"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_majority_requirement",
+    "question": "Uzlaşmada düğümlerin yarısından fazlasının onayı neden gereklidir?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "düğümlerin yarısından fazlası kabul ettiğinde kesinleşir"
+      ],
+      [
+        "iki farklı çoğunluk kümesi en az bir düğümde kesişmek zorundadır"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_backup_access_protection",
+    "question": "Yedeklerin saldırgan tarafından silinmesi nasıl engellenir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.3,
+    "relevant_chunk_terms": [
+      [
+        "erişim sınırlandırılmalı",
+        "çevrimdışı veya değiştirilemez bir kopya"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_mfa_strength_comparison",
+    "question": "SMS ile doğrulama uygulaması arasında hangisi daha güvenlidir?",
+    "expectation": "relevant",
+    "expected_source": "cybersecurity.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "SMS kodları temel bir ek koruma sunsa da",
+        "genellikle daha güçlü seçeneklerdir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_horizontal_scaling_choice",
+    "question": "Bir veritabanının kapasitesi tek bir makinenin gücünü aştığında hangi ölçekleme türü seçilir?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Yatay ölçekleme veriyi birden çok makineye dağıtır",
+        "dağıtık sorgular, tutarlılık ve arıza yönetimi gibi yeni sorunlar getirir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_rebase_shared_risk",
+    "question": "Git geçmişini düzleştirmek neden ortak bir dalda risklidir?",
+    "expectation": "relevant",
+    "expected_source": "versiyon_kontrol.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "commit kimliklerini yeniden",
+        "paylaşılmış bir dalda"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_high_coverage_sufficiency",
+    "question": "Testlerde yüksek kapsam oranı tek başına yeterli midir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "Yüksek kapsam ise doğruluk kanıtı değildir",
+        "Hiçbir şey iddia etmeyen bir test de kapsamı yükseltir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_flaky_test_trust",
+    "question": "Kırılgan testleri görmezden gelmek neden risklidir?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_testi.txt",
+    "min_score": 0.35,
+    "relevant_chunk_terms": [
+      [
+        "Kırılgan testler görmezden gelinmemelidir",
+        "ekibin test sonuçlarına olan güvenini bozar"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_datamining_algorithm_choice",
+    "question": "Veri madenciliğinde hangi algoritmanın kullanılacağına nasıl karar verilir?",
+    "expectation": "relevant",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Kullanılacak algoritma, yapılmak istenen analizin amacına göre seçilir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_datamining_result_presentation",
+    "question": "Veri madenciliği sonuçları kullanıcıya nasıl aktarılır?",
+    "expectation": "relevant",
+    "expected_source": "datamining.pdf",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Elde edilen bilgiler tablo",
+        "veya rapor şeklinde sunulabilir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_network_dns_caching",
+    "question": "Alan adı kayıtları güncellendiğinde eski bilgi neden hemen kaybolmaz?",
+    "expectation": "relevant",
+    "expected_source": "bilgisayar_aglari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Çözümleme sonuçları belirli bir süre boyunca önbellekte tutulur",
+        "eski bilginin bir süre daha dolaşımda kalmasına yol açar"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_arch_interface_narrow",
+    "question": "Bir arayüze işlev eklerken neden temkinli davranılmalı?",
+    "expectation": "relevant",
+    "expected_source": "yazilim_mimarisi.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Arayüz dar tutulmalıdır",
+        "sonsuza kadar desteklenmesi gereken bir taahhüttür"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_nlp_evidence_check",
+    "question": "Bir sistemin bilmediğini söyleyebilmesi neden önemlidir?",
+    "expectation": "relevant",
+    "expected_source": "dogal_dil_isleme.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "Bir sistemin \"bilmiyorum\" diyebilmesi, doğru cevap verebilmesi kadar değerlidir",
+        "Soru kelimelerinin metinde gerçekten geçip geçmediğini ölçmek"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_distsys_partition_tradeoff",
+    "question": "Ağ bölündüğünde sistem hangi ödünleşimle karşı karşıya kalır?",
+    "expectation": "relevant",
+    "expected_source": "dagitik_sistemler.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "isteklere yanıt vermeyi sürdürüp tutarsızlığı kabul etmek",
+        "tutarlılığı korumak için bazı isteklere yanıt vermemek"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_ds_hashtable_resize",
+    "question": "Karma tablosu dolduğunda ne olur?",
+    "expectation": "relevant",
+    "expected_source": "veri_yapilari.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "tablo belirli bir doluluğa ulaştığında büyütülür",
+        "bütün anahtarlar yeniden yerleştirilir"
+      ]
+    ]
+  },
+  {
+    "name": "phrasing_db_query_optimization_myth",
+    "question": "Bir SQL sorgusunun yazım biçimini değiştirmek başarımı gerçekten artırır mı?",
+    "expectation": "relevant",
+    "expected_source": "veritabani_sistemleri.txt",
+    "min_score": 0.4,
+    "relevant_chunk_terms": [
+      [
+        "sorguyu elle \"hızlandırmaya\" çalışmak çoğu zaman etkisizdir",
+        "yazım biçiminde değil"
+      ]
+    ]
   }
 ]

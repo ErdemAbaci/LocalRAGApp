@@ -151,7 +151,7 @@ MATCHERS = {
 }
 
 # Uygulamanın kullandığı eşleştirici.
-APPLIED_MATCHER = "common5"
+APPLIED_MATCHER = "kök5-3"
 
 
 def build_context(results):

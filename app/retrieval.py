@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.preprocessing import normalize
 
-from app.config import RRF_K, USE_HYBRID_SEARCH
+from app.config import BM25_B, BM25_K1, RRF_K, USE_HYBRID_SEARCH
 from app.database import get_all_chunks
 from app.embeddings import embed_texts
 from app.sparse_search import (
@@ -139,16 +139,23 @@ def attach_neighbor_chunks(ranked_results, selected_results, radius=1):
     return enriched_results
 
 
-def get_top_chunks(
+def rank_chunks(
     question,
+    chunks,
     top_k=3,
-    source_name=None,
     neighbor_radius=1,
     use_hybrid=USE_HYBRID_SEARCH,
     rrf_k=RRF_K,
+    bm25_k1=BM25_K1,
+    bm25_b=BM25_B,
 ):
-    chunks = get_all_chunks(source_name=source_name)
+    """Verilen chunk listesini sıralar; veri erişimi yapmaz.
 
+    Skorlama, veritabanından ayrıldı çünkü chunking deneyi aynı sıralama
+    mantığını **indekse dokunmadan** farklı parçalama ayarlarıyla ölçmek
+    zorunda. Aynı kodu araç içinde tekrar yazmak, ölçülen şeyin uygulamanın
+    gerçekte çalıştırdığı şey olmadığı anlamına gelirdi.
+    """
     if not chunks:
         return []
 
@@ -193,7 +200,7 @@ def get_top_chunks(
     question_term_weights = corpus_term_weights(question, document_terms)
 
     if use_hybrid:
-        sparse_scores = bm25_scores(question, document_terms)
+        sparse_scores = bm25_scores(question, document_terms, k1=bm25_k1, b=bm25_b)
         fusion_scores = reciprocal_rank_fusion(
             dense_scores,
             sparse_scores,
@@ -233,4 +240,26 @@ def get_top_chunks(
         results,
         selected_results,
         radius=neighbor_radius,
+    )
+
+
+def get_top_chunks(
+    question,
+    top_k=3,
+    source_name=None,
+    neighbor_radius=1,
+    use_hybrid=USE_HYBRID_SEARCH,
+    rrf_k=RRF_K,
+    bm25_k1=BM25_K1,
+    bm25_b=BM25_B,
+):
+    return rank_chunks(
+        question,
+        get_all_chunks(source_name=source_name),
+        top_k=top_k,
+        neighbor_radius=neighbor_radius,
+        use_hybrid=use_hybrid,
+        rrf_k=rrf_k,
+        bm25_k1=bm25_k1,
+        bm25_b=bm25_b,
     )
