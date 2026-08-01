@@ -62,10 +62,14 @@ class FilteredRetrievalTests(unittest.TestCase):
 
         with patch("app.retrieval.get_all_chunks", return_value=chunks) as get_chunks:
             with patch("app.retrieval.embed_texts", return_value=[[1.0, 0.0]]):
+                # Bu test kaynak filtresini ölçer, sıralamayı değil. Reranking
+                # açık bırakılırsa test cross-encoder'ı indirmeye çalışır;
+                # unit testler ağa çıkmamalıdır.
                 results = get_top_chunks(
                     "Guvenlik nedir?",
                     top_k=1,
                     source_name="notes.txt",
+                    use_reranker=False,
                 )
 
         get_chunks.assert_called_once_with(source_name="notes.txt")

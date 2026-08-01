@@ -1,4 +1,40 @@
+# Retrieval kapısı: `gate_score(chunks)` (en yüksek cosine) bu değerin
+# altındaysa hiç sonuç yok sayılır ve `no_evidence` döner. Ölçüm:
+# `tools/threshold_analysis.py`, 112 alakalı + 13 not_found vaka, 217 chunk.
+#
+#   alakalı min (gate_score)  = 0.4339
+#   not_found max (gate_score) = 0.6372
+#   boşluk                     = -0.2034  -> AYIRT ETMİYOR
+#
+# Bu, `kalibrasyon-kaydi` skill'inde daha önce ölçülen sınırın aynısı: cosine
+# konu benzerliğini ölçer, cevap içerip içermediğini değil
+# (`hard_negative_firewall_rules` 0.5985 > `rag_definition` 0.5570 örneği).
+# Groundedness kapıya taşındıktan sonra bu eşiğin görevi zaten daralmıştı:
+# artık "cevap var mı" değil yalnızca "indeks tamamen alakasız mı" sorusuna
+# bakıyor. Mevcut 0.20, alakalı minimumun (0.4339) çok altında olduğu için hiç
+# meşru soruyu reddetmiyor; yükseltmek ayırt etme gücü kazandırmıyor (0.40'ta
+# bile not_found'ın %76.9'u hâlâ geçiyor), yalnızca meşru sorularda risk
+# yaratır. DEĞİŞTİRİLMEDİ — ölçüldü, mevcut değer zaten güvenli tarafta.
 SIMILARITY_THRESHOLD = 0.20
+
+# İkinci ve sonraki sıradaki chunk'ların context'e girme eşiği (cosine).
+# Birinci sıra bu kuralın dışındadır. Ölçüm: `tools/threshold_analysis.py`,
+# 112 alakalı vakadaki 2+. sıra chunk'lar, vakanın içerik imzasını
+# karşılayan (MEŞRU) ve karşılamayan (GÜRÜLTÜ) olarak ikiye ayrılır.
+#
+#   meşru min (n=12)   = 0.3496
+#   gürültü max (n=212) = 0.7701
+#   boşluk               = -0.4205  -> AYIRT ETMİYOR
+#
+# Aynı kör nokta: gürültü chunk'lar da konu olarak yakın olduğu için yüksek
+# cosine alabiliyor. Tek somut bulgu: `arch_monolith_vs_microservices`
+# vakasının doğru 2. sıradaki chunk'ı 0.3496 ile mevcut 0.35'in az altında
+# kalıyor ve context'e giremiyor (bu, AGENTS.md'de zaten sıralama hatası
+# olarak bilinen 4 vakadan biri). Eşiği 0.34'e çekmek bu chunk'ı context'e
+# soktu ama ölçülebilir hiçbir fark üretmedi: `Recall@1/3/5` ve `MRR` aynı
+# kaldı, eval 124/128'de sabit kaldı (`--compare` ile doğrulandı). Yani
+# sorun context eşiği değil, sıralamanın kendisi (reranking'in konusu).
+# DEĞİŞTİRİLMEDİ — ölçüldü, ölçülebilir bir kazanç bulunamadı.
 CONTEXT_SCORE_THRESHOLD = 0.35
 CONTEXT_RELATIVE_SCORE_MARGIN = 0.20
 TOP_K = 3
@@ -197,6 +233,60 @@ BM25_B = 0.75
 # kalıyor. Korpus büyüdükçe cosine'in tek başına yetmediği daha da belirginleşti.
 RRF_K = 2
 
+# Cross-encoder ile yeniden sıralama. Mekanizma ve neden yalnızca sıralamada
+# kullanıldığı `app/reranker.py` içinde.
+#
+# Model seçimi: `bge-reranker-base`, XLM-RoBERTa tabanlı çok dilli bir
+# cross-encoder (278M parametre). Türkçe destekleyen daha isabetli bir
+# alternatif olan `bge-reranker-v2-m3` (568M) seçilmedi; CPU'da her soruya
+# eklediği süre bu projedeki kazanca değmiyor. Modelin bulunamaması hata
+# değildir: `app/reranker.py` sıralamayı ilk aşamanın sonucunda bırakır.
+#
+# Aday havuzu (`RERANK_CANDIDATE_POOL`): ilk aşama bu kadar chunk seçer,
+# cross-encoder onları yeniden sıralar, sonuçtan `TOP_K` alınır. Havuzu
+# büyütmek ilk aşamada bedavadır (zaten korpusun tamamı skorlanıyor), pahalı
+# olan ikinci aşamadır: süre aday sayısıyla doğrusal artar.
+#
+# ÖLÇÜLDÜ VE KAPATILDI. `tools/reranker_analysis.py`, 112 etiketli vaka,
+# 217 chunk, `bge-reranker-base`:
+#
+#   ayar               R@1      R@3      R@5      MRR    sn/soru
+#   kapalı          0.8973   0.9911   0.9911   0.9464     0.060   <- seçildi
+#   havuz=5         0.9018   0.9821   0.9911   0.9457     0.130
+#   havuz=10        0.8393   0.9732   0.9821   0.9085     0.193
+#   havuz=15        0.8393   0.9554   0.9911   0.9068     0.260
+#   havuz=20        0.8393   0.9554   0.9821   0.9046     0.325
+#   havuz=30        0.8214   0.9375   0.9732   0.8894     0.465
+#
+# 8 vaka iyileşti, 14 vaka kötüleşti; havuz büyüdükçe sonuç monoton kötüleşiyor.
+# Monotonluk önemli: tek bir kötü havuz değeri olsa ayar sorunu denebilirdi,
+# eğrinin tamamı düşüyorsa sinyalin kendisi zayıf demektir.
+#
+# Model bozuk değil. Doğrudan test edildi: "Kilitlenme nedir?" sorusuna doğru
+# tanım cümlesi 0.9992, muzla ilgili cümle 0.0000 alıyor — Türkçede ayırt
+# ediyor. Bozulma gerçek parçalarda oluyor: `ml_train_val_test_split`
+# sorusunda doğru chunk 0.8392 alırken dağıtık sistemlerdeki uzlaşıyla ilgili
+# tamamen alakasız bir chunk 0.9981 alıyor.
+#
+# Teşhis: chunk'larımız 128 tokenda kesilen kırıntılar, kendi başına ayakta
+# duran paragraflar değil (128, embedding modelinin sert sınırı; reranker 512
+# okuyabilirdi). Cross-encoder'lar paragraf seviyesinde alaka için eğitilir ve
+# cümle ortasında başlayan bir parça yeterli malzeme vermiyor.
+#
+# Denenmemiş iki iyileştirme kayda geçiriliyor: (1) reranker'a çıplak chunk
+# yerine chunk+komşu penceresini vermek, (2) reranking'i ilk aşamanın yerine
+# koymak yerine RRF ile birleştirmek (şu an cross-encoder hybrid sırasını
+# tamamen siliyor, bu yüzden bir vaka 1. sıradan ilk 5'in dışına düştü).
+# İkisi de yapılmadı çünkü iyileştirilecek yer zaten çok dar: `Recall@3`
+# kapalıyken 0.9911, yani reranking'in kazanabileceği en fazla şey eval'de
+# kalan 4 vakadır (%3) ve gerçekçi beklenti bunun yarısıdır.
+#
+# `True` yapmak yeterlidir; kod, testler ve ölçüm aracı repoda duruyor.
+RERANKER_MODEL = "BAAI/bge-reranker-base"
+RERANK_MAX_LENGTH = 512
+RERANK_CANDIDATE_POOL = 15
+USE_RERANKER = False
+
 # Groundedness kontrolü. Üretilen cevabın verilen context'e dayanıp dayanmadığını
 # cümle bazlı ölçer; mekanizma ve gerekçe `app/groundedness.py` içinde.
 # Ölçüm: `tools/groundedness_analysis.py`, 108 vaka, 217 chunk.
@@ -246,6 +336,23 @@ GROUNDEDNESS_SENTENCE_SUPPORT = 0.60
 GROUNDEDNESS_MIN_SENTENCE_TERMS = 2
 
 USE_EXTRACTIVE_FALLBACK = True
+
+# Extractive kısayolunun `best_source.score` (cosine) eşiği; yalnızca
+# context'e TEK chunk giren vakalarda devreye girer (`should_use_extractive_answer`).
+# Ölçüm: `tools/threshold_analysis.py`, tek kaynaklı 50 alakalı + 8 not_found vaka.
+#
+#   alakalı min (tek kaynaklı) = 0.1972
+#   not_found max (tek kaynaklı) = 0.6372
+#   boşluk                       = -0.4400  -> AYIRT ETMİYOR
+#
+# Aynı kör nokta yine ölçüldü: cosine tek başına relevanslığı ayıramıyor.
+# 0.50 -> 0.30 denemesi ölçülebilir hiçbir fark üretmedi (eval 124/128'de
+# sabit kaldı). Bu beklenir, çünkü bu eşiğin taşıdığı asıl yük burada değil:
+# kısayolun gerçek güvenliği `EXTRACTIVE_TERM_EVIDENCE_MIN = 0.675` (kelime
+# kanıtı, aşağıda) tarafından sağlanıyor — o iki hard negative'in sızmasını
+# önleyen odur, bu cosine eşiği değil. Bu eşiğin görevi güvenlik değil
+# extractive/generative arasında bir hız-kapsam ödünleşimi; ölçülebilir kazanç
+# bulunamadığı için DEĞİŞTİRİLMEDİ.
 EXTRACTIVE_SCORE_THRESHOLD = 0.50
 
 # Extractive kısayolu için gereken en az kelime kanıtı. Bu yol chunk metnini

@@ -9,11 +9,13 @@ from unittest.mock import patch
 
 import main
 from app import database
+from app.config import RERANKER_MODEL
 from app.health import (
     check_documents,
     check_foundry,
     check_index,
     check_index_freshness,
+    check_reranker,
     run_health_checks,
 )
 from app.index_state import build_source_manifest
@@ -48,6 +50,12 @@ class HealthCheckTests(unittest.TestCase):
             (docs_dir / "notes.txt").write_text("RAG notları", encoding="utf-8")
             db_path = root / "rag.db"
             foundry_home = create_foundry_cache(root)
+            # Reranker cache'i de sahte olmalı; aksi halde bu test makinede
+            # modelin indirilmiş olup olmamasına göre farklı sonuç verir.
+            reranker_cache = root / "hub"
+            (reranker_cache / ("models--" + RERANKER_MODEL.replace("/", "--"))).mkdir(
+                parents=True,
+            )
 
             with patch.object(database, "DB_PATH", db_path):
                 database.init_db()
@@ -66,6 +74,7 @@ class HealthCheckTests(unittest.TestCase):
                     db_path=db_path,
                     foundry_home=foundry_home,
                     executable_finder=lambda name: "/usr/local/bin/foundry",
+                    reranker_cache_dir=reranker_cache,
                 )
 
         self.assertTrue(all(check.status == "ok" for check in checks))
@@ -184,6 +193,47 @@ class HealthCheckTests(unittest.TestCase):
         self.assertIn("1 başarılı", output)
         self.assertIn("1 uyarı", output)
         self.assertIn("0 hata", output)
+
+
+class RerankerCheckTests(unittest.TestCase):
+    # Bu iki test bayrağı açıkça açar. `USE_RERANKER` ölçüm sonucu kapatıldı
+    # (bkz. `app/config.py`); testin varsayılan değere bağlı kalması, bayrak
+    # her değiştiğinde sessizce başka bir şeyi ölçmesi demek olurdu.
+    def test_cached_model_is_reported_as_ready(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ("models--" + RERANKER_MODEL.replace("/", "--"))).mkdir()
+            with patch("app.health.USE_RERANKER", True):
+                check = check_reranker(cache_dir=root)
+
+        self.assertEqual(check.status, "ok")
+        self.assertIn(RERANKER_MODEL, check.message)
+
+    def test_missing_model_is_a_warning_not_an_error(self):
+        # Reranking bir iyileştirmedir, ön şart değil; eksikliği uygulamayı
+        # bozmaz, yalnızca sıralamayı hybrid sonucunda bırakır.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.health.USE_RERANKER", True):
+                check = check_reranker(cache_dir=Path(temp_dir))
+
+        self.assertEqual(check.status, "warning")
+        self.assertIn("indirilmemiş", check.message)
+
+    def test_disabled_reranker_is_not_a_warning(self):
+        # Kapalı olmak ölçülmüş bir karardır, arıza değil.
+        with patch("app.health.USE_RERANKER", False):
+            check = check_reranker()
+
+        self.assertEqual(check.status, "ok")
+        self.assertIn("Kapalı", check.message)
+
+    def test_check_does_not_load_the_model(self):
+        # `/doctor` çalıştırmak 1 GB'lık bir modeli belleğe almamalıdır.
+        with patch("app.reranker.load_cross_encoder") as loader:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                check_reranker(cache_dir=Path(temp_dir))
+
+        loader.assert_not_called()
 
 
 if __name__ == "__main__":

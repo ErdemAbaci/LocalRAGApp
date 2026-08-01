@@ -40,14 +40,16 @@ Kullanıcının açık isteği olmadan embedding modelini, varsayılan LLM'i, e�
 3. Her chunk için embedding üret.
 4. Yeni indeksin tamamını bellekte hazırla.
 5. SQLite indeksini tek transaction ile atomik olarak değiştir.
-6. Kullanıcı sorusunun embeddingini üret.
-7. Chunk embeddingleriyle cosine similarity hesapla.
-8. En iyi sonuçları skorlarına göre sırala ve zayıf context'i filtrele.
-9. Ön kapı: soru bu korpusun konusu mu? Değilse `no_evidence`, model yüklenmez.
-10. Uygun cevap modunu seç: `extractive`, `generative` veya `fallback_extractive`.
-11. `generative` ise groundedness kapısı: üretilen cevap context'e dayanmıyorsa
+6. Soru bir takip sorusuysa (`app/query_rewrite.py`) bir önceki sorunun konu
+   kelimelerini ekle; eklenen kelimeleri kullanıcıya bildir.
+7. Kullanıcı sorusunun embeddingini üret.
+8. Chunk embeddingleriyle cosine similarity hesapla.
+9. En iyi sonuçları skorlarına göre sırala ve zayıf context'i filtrele.
+10. Ön kapı: soru bu korpusun konusu mu? Değilse `no_evidence`, model yüklenmez.
+11. Uygun cevap modunu seç: `extractive`, `generative` veya `fallback_extractive`.
+12. `generative` ise groundedness kapısı: üretilen cevap context'e dayanmıyorsa
     `ungrounded` döner ve cevap gösterilmez.
-12. Cevabı, kaynakları ve performans sürelerini terminalde göster.
+13. Cevabı, kaynakları ve performans sürelerini terminalde göster.
 
 ## 4. Dosya Haritası
 
@@ -64,9 +66,18 @@ sorumluluk sınırları tutulur.
 - `app/groundedness.py`: Cevabın context'e dayanıp dayanmadığını ölçer. Kelime
   kanıtı kapısı **soruyu** ölçer, bu modül **cevabı**. İkisi aynı eşleştiriciyi
   kullanır ama farklı sorulara bakar; birleştirme.
+- `app/query_rewrite.py`: Takip sorusunu tanır ve önceki sorunun konu
+  kelimelerini ekler. Kullanıcının kelimelerini **silmez**, yalnızca ekler;
+  böylece yeniden yazım sorunun anlamını değiştiremez. Konu takibi `main.py`
+  içindeki tek bir `FollowUpContext` örneğindedir ve hatırlanan şey yeniden
+  yazılmış sorudur — ham soru hatırlansaydı zincir ikinci adımda kopardı.
 - `app/rag_service.py`: Cevap kararlarını sunumdan bağımsız çalıştırıp
   `RAGResult` döndürür. Terminal gösterimi `app/cli_output.py`'nin işidir; bu iki
   katman birbirine karışmamalıdır.
+- `app/reranker.py`: Cross-encoder ile yeniden sıralama. **Varsayılan olarak
+  kapalıdır** (`USE_RERANKER = False`); ölçüldü ve bu korpusta sıralamayı
+  kötüleştirdiği görüldü. Kod, testleri ve `tools/reranker_analysis.py` ölçüm
+  kaydı olarak duruyor. Silme; negatif sonucun kanıtı budur.
 - `app/retrieval.py`: `rank_chunks()` saf sıralamadır ve veri erişimi yapmaz;
   `get_top_chunks()` onu veritabanına bağlar. Bu ayrım `tools/chunking_analysis.py`
   indekse dokunmadan ölçebilsin diye var.
@@ -100,6 +111,11 @@ sorumluluk sınırları tutulur.
   gelir ve tanım gereği dayanaklıdır — dayanaklı olmak ALAKALI olmak değildir.
   `extractive`te kanıt yetersizse soru reddedilmez, üretken yola düşer;
   `fallback_extractive`te düşecek yol kalmadığı için `no_evidence` döner.
+- Takip sorusu yeniden yazımı retrieval'dan **önce** olmalı ve kapılar yeniden
+  yazılmış soruyu görmelidir. Yeniden yazımı kapılardan sonraya alırsan
+  retrieval konuyu bulur ama kelime kanıtı kapısı hâlâ bağlamsız soruya bakıp
+  doğru sonucu reddeder. Eklenen kelimeler kullanıcıya bildirilmelidir; yanlış
+  bağlam görünmezse düzeltilemez.
 - Kaynak adı, sayfa, chunk ve skor bilgisi model cevabının içinde değil, ayrı kaynak bölümünde gösterilmeli.
 - LLM boş, çok kısa, etiket ağırlıklı veya hatalı cevap verirse en iyi kaynak chunkına fallback yapılmalı.
 - LLM yalnızca gerektiğinde lazy-load edilmelidir; uygulama açılışında zorunlu olarak yüklenmemelidir.
@@ -124,6 +140,11 @@ USE_HYBRID_SEARCH = True
 BM25_K1 = 1.5
 BM25_B = 0.75
 RRF_K = 2
+
+USE_RERANKER = False                    # ölçüldü: bu korpusta kötüleştiriyor
+RERANKER_MODEL = "BAAI/bge-reranker-base"
+RERANK_CANDIDATE_POOL = 15
+RERANK_MAX_LENGTH = 512
 
 TERM_EVIDENCE_THRESHOLD = 0.21          # ön kapı: yalnızca alan filtresi
 TERM_EVIDENCE_MIN_PREFIX = 5
@@ -151,7 +172,7 @@ Bu değerler mevcut küçük veri seti ve regression testlerine göre seçildi. 
 Son doğrulanan durumda:
 
 - 12 kaynak dosya ve 217 chunk bulunuyor.
-- Unit testler `262/262` başarılı.
+- Unit testler `294/294` başarılı.
 - Eval seti 125 vaka içerir (112'si etiketli, 13'ü `not_found`). Retrieval
   metrikleri: `Recall@1 = 0.8973`, `Recall@3 = 0.9911`, `Recall@5 = 0.9911`,
   `MRR = 0.9464`; `124/128` vaka geçiyor.
@@ -163,8 +184,20 @@ Son doğrulanan durumda:
   (`0.675 -> 0.21`, artık yalnızca alan filtresi) ve asıl karar
   `app/groundedness.py`e geçti. Sonuç: kapının reddettiği 6 meşru vakanın 6'sı
   da geçiyor, 13 `not_found` vakasının 13'ü hâlâ reddediliyor.
-- Kalan 4 başarısız vaka **sıralama** hatasıdır ve reranking'in konusudur;
-  `known_gap` yapılmadı, ölçülür hâlde bırakıldı: `ds_stack_vs_queue`,
+- **Reranking ölçüldü ve kapatıldı.** Cross-encoder (`bge-reranker-base`) 112
+  etiketli vakada `MRR`'ı 0.9464'ten 0.9068'e, `Recall@1`'i 0.8973'ten
+  0.8393'e indirdi; 8 vaka iyileşti, 14 kötüleşti ve aday havuzu büyüdükçe
+  sonuç monoton kötüleşti. Model Türkçede ayırt ediyor (doğrudan test edildi:
+  doğru tanım 0.9992, alakasız cümle 0.0000), yani sorun kodda veya dilde
+  değil: 128 tokenlık chunk'lar paragraf seviyesinde eğitilmiş bir
+  cross-encoder'a yetmiyor. Tablo ve teşhis `app/config.py` içinde.
+- **Takip soruları artık çalışıyor.** `app/query_rewrite.py` kural tabanlı
+  query rewriting yapıyor; LLM ile yeniden yazma latency ve
+  test edilebilirlik gerekçesiyle reddedildi. Aynı "Peki nasıl önlenir?"
+  sorusu, hatırlanan konuya göre üç farklı doğru dokümana gidiyor.
+- Kalan 4 başarısız vaka **sıralama** hatasıdır. Reranking'in hedefiydi, ama
+  ölçüm onu çözmediğini gösterdi; `known_gap` yapılmadı, ölçülür hâlde
+  bırakıldı: `ds_stack_vs_queue`,
   `arch_monolith_vs_microservices`, `phrasing_high_coverage_sufficiency`,
   `phrasing_nlp_evidence_check`. Hepsinde doğru kaynak 2. sırada.
 - **Kararın bir kısmı artık deterministik değil.** Hard negative sorular
@@ -276,29 +309,53 @@ Sıradaki hedefleri şu sırayla ele al:
    `app/retrieval.py` (RRF). Karar: birleşik skor yalnızca sıralamada kullanılır,
    kapı skoru cosine kalır. Sonuç: `Recall@1` 0.7826 -> 0.9783, `MRR` 0.8551 -> 1.0000.
    Ayrıntı ve SQLite FTS5'in neden tercih edilmediği: `kalibrasyon-kaydi` skill.
-4. **Reranking — sıradaki iş.** Geniş aday havuzunu cross-encoder ile yeniden
-   sırala. Ön şart karşılandı: eval seti 112 etiketli vakaya çıktı ve metrikler
-   tavandan indi (`MRR = 0.9464`). Ölçülecek boşluk somut: eval'de kalan 4
-   başarısız vakanın dördünde de doğru kaynak 2. sırada. Aynı cross-encoder
-   groundedness'ın kör noktasını da kapatabilir (aşağıya bak).
-   Tam gerekçe için `kalibrasyon-kaydi` skill'ini çağır.
-   *Mimari karar: aday sayısı ve kabul edilebilir latency bütçesi.*
-5. **Conversation history.** Asıl iş takip sorusu değil, query rewriting; soruyu
-   retrieval'a bağımsız (standalone) biçimde ver.
-   *Mimari karar: rewriting tasarımı ve geçmiş bütçesi.*
+4. ~~**Reranking.**~~ **Ölçüldü ve KAPATILDI — negatif sonuç.**
+   `app/reranker.py` ve `USE_RERANKER` bayrağı repoda duruyor, varsayılan
+   `False`. `bge-reranker-base` ile 112 etiketli vakada `MRR` 0.9464 -> 0.9068,
+   `R@1` 0.8973 -> 0.8393; 8 vaka iyileşti, 14 kötüleşti ve havuz büyüdükçe
+   sonuç **monoton** kötüleşti. Model bozuk değil (Türkçe ayırt etme doğrudan
+   test edildi); teşhis, 128 tokenlık chunk'ların paragraf seviyesinde çalışan
+   bir cross-encoder'a yetmemesidir.
+   Ölçüm tablosu, teşhis ve denenmemiş iki iyileştirme `app/config.py` içinde
+   `RERANKER_MODEL` sabitinin üstünde.
+   **Bu maddeyi yeniden açmadan önce o yorumu oku;** aynı ölçümü tekrarlamak
+   yaklaşık 10 dakika CPU yükü demektir.
+5. ~~**Conversation history.**~~ **Tamamlandı.** `app/query_rewrite.py` takip
+   sorusunu kural ile tanır ve bir önceki sorunun konu kelimelerini soruya
+   ekler; soru böylece retrieval'a bağımsız (standalone) gider.
+   Mimari karar LLM ile yeniden yazma **aleyhine** verildi: ikinci bir model
+   çağrısı her soruya 5-40 saniye ekler ve çıktı deterministik olmadığı için
+   testle sabitlenemez. Kural tabanlı yöntem mevcut `extract_question_terms()`
+   makinesini yeniden kullanır, gecikmesi sıfırdır ve 17 deterministik testle
+   kapsanır.
+   Ölçüm: aynı "Peki nasıl önlenir?" sorusu bağlamsızken her zaman
+   `isletim_sistemleri.txt`e gidiyor; konu hatırlandığında sırasıyla
+   `isletim_sistemleri.txt`, `cybersecurity.txt` ve `makine_ogrenmesi.txt`e
+   gidiyor. Kapı skoru `0.4766 -> 0.6534` ve `0.4637 -> 0.7379`.
 
 Bu sıranın gerekçesi: 0–2 **ölçme yeteneği** kazandırır, 3–5 ise ancak o yetenek
 varsa öğretici ve doğrulanabilir olur. Hybrid search ve reranking'in iddiası
 "retrieval kalitesini artırmak"tır; iyi bir eval olmadan bu iddia ölçülemez.
+Sıranın kendini doğruladığı yer 4. madde oldu: eval önce güçlendirildiği için
+reranking'in **kötüleştirdiği** ölçülebildi. Ölçme yeteneği kurulmasaydı
+cross-encoder eklenir ve iyileştirdiği varsayılırdı.
+
+**Planlanan maddelerin tamamı kapandı.** Yeni bir yön seçilene kadar aşağıdaki
+fırsat listesi geçerlidir; oradaki hiçbir madde acil değildir.
 
 Fırsat buldukça ele alınacaklar (öncelikli değil):
 
 - **Groundedness'ın bilinen kör noktası.** Kontrol "cevap context'e dayanıyor
   mu" diye sorar, "cevap soruyu yanıtlıyor mu" diye değil. Retrieval alakasız
   ama gerçek bir metin getirir ve model onu özetlerse cevap DAYANAKLI çıkar.
-  Bu durumda tek savunma modelin kendi reddidir. Cross-encoder'a geçilirse bu
-  boşluk da kapanır; 4. maddeyle birlikte ele alınabilir çünkü aynı model iki
-  işi birden yapar.
+  Bu durumda tek savunma modelin kendi reddidir.
+  Bu boşluğun cross-encoder ile kapatılması planlanıyordu; 4. maddedeki ölçüm
+  o planı geçersiz kıldı. Aynı model sıralamada alakayı ayırt edemediğine göre
+  kapıda da güvenilmez. Başka bir çözüm gerekiyor.
+- **Reranking'in denenmemiş iki iyileştirmesi.** Reranker'a çıplak chunk yerine
+  chunk+komşu penceresi vermek ve reranking'i ilk aşamanın yerine koymak yerine
+  RRF ile birleştirmek. İkisi de teşhisin işaret ettiği yönde ama beklenen
+  kazanç küçük (`Recall@3` zaten 0.9911). Ayrıntı `app/config.py` içinde.
 - **Incremental reindex.** Ancak `time local-rag reindex` rahatsız edici hale
   geldiğinde. Mevcut ölçekte (12 dosya, 217 chunk) çözülecek bir problem yok.
 - **Ölçekleme deneyi.** Chunk sayısını sentetik olarak artırıp brute force

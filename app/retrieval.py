@@ -1,7 +1,14 @@
 import numpy as np
 from sklearn.preprocessing import normalize
 
-from app.config import BM25_B, BM25_K1, RRF_K, USE_HYBRID_SEARCH
+from app.config import (
+    BM25_B,
+    BM25_K1,
+    RERANK_CANDIDATE_POOL,
+    RRF_K,
+    USE_HYBRID_SEARCH,
+    USE_RERANKER,
+)
 from app.database import get_all_chunks
 from app.embeddings import embed_texts
 from app.sparse_search import (
@@ -139,6 +146,41 @@ def attach_neighbor_chunks(ranked_results, selected_results, radius=1):
     return enriched_results
 
 
+def apply_reranking(
+    question,
+    ranked_results,
+    top_k,
+    use_reranker=USE_RERANKER,
+    candidate_pool=RERANK_CANDIDATE_POOL,
+    rerank_func=None,
+):
+    """İlk aşamanın havuzunu cross-encoder ile yeniden sıralar.
+
+    Havuz `top_k`'dan küçük olamaz; aksi halde reranking seçilecek sonuç sayısını
+    kısar ve ölçüm "reranking mi kötüledi, havuz mu daraldı" sorusuna cevap
+    veremez hale gelir.
+
+    Model yüklenemezse ilk aşamanın sırası aynen döner. Reranking bir
+    iyileştirmedir, ön şart değil.
+    """
+    if not use_reranker or not ranked_results:
+        return ranked_results[:top_k]
+
+    pool = ranked_results[:max(top_k, candidate_pool)]
+
+    if rerank_func is None:
+        from app.reranker import RerankerUnavailableError, rerank
+
+        try:
+            reranked = rerank(question, pool)
+        except RerankerUnavailableError:
+            return ranked_results[:top_k]
+    else:
+        reranked = rerank_func(question, pool)
+
+    return reranked[:top_k]
+
+
 def rank_chunks(
     question,
     chunks,
@@ -148,6 +190,9 @@ def rank_chunks(
     rrf_k=RRF_K,
     bm25_k1=BM25_K1,
     bm25_b=BM25_B,
+    use_reranker=USE_RERANKER,
+    candidate_pool=RERANK_CANDIDATE_POOL,
+    rerank_func=None,
 ):
     """Verilen chunk listesini sıralar; veri erişimi yapmaz.
 
@@ -234,7 +279,14 @@ def rank_chunks(
         key=lambda item: (item["fusion_score"], item["score"]),
         reverse=True,
     )
-    selected_results = results[:top_k]
+    selected_results = apply_reranking(
+        question,
+        results,
+        top_k=top_k,
+        use_reranker=use_reranker,
+        candidate_pool=candidate_pool,
+        rerank_func=rerank_func,
+    )
 
     return attach_neighbor_chunks(
         results,
@@ -252,6 +304,9 @@ def get_top_chunks(
     rrf_k=RRF_K,
     bm25_k1=BM25_K1,
     bm25_b=BM25_B,
+    use_reranker=USE_RERANKER,
+    candidate_pool=RERANK_CANDIDATE_POOL,
+    rerank_func=None,
 ):
     return rank_chunks(
         question,
@@ -262,4 +317,7 @@ def get_top_chunks(
         rrf_k=rrf_k,
         bm25_k1=bm25_k1,
         bm25_b=bm25_b,
+        use_reranker=use_reranker,
+        candidate_pool=candidate_pool,
+        rerank_func=rerank_func,
     )

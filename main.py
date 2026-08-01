@@ -75,6 +75,7 @@ from app.project import (
     ProjectConfigurationError,
     get_project_paths,
 )
+from app.query_rewrite import FollowUpContext
 from app.rag_service import EmptyIndexError, EmptyQuestionError, RAGService
 from app.session import SessionExportError, SessionHistory
 
@@ -83,6 +84,7 @@ DEBUG = False
 _llm = None
 _source_filter = None
 _session_history = SessionHistory()
+_follow_up_context = FollowUpContext()
 PROJECT_PATHS = get_project_paths()
 
 
@@ -1113,6 +1115,13 @@ def answer_question(question, source_name=None, use_active_filter=True):
 
     warn_if_index_is_stale()
 
+    question, carried_terms = _follow_up_context.resolve(question)
+    if carried_terms:
+        print_info(
+            "Takip sorusu olarak yorumlandı; aramaya eklenen bağlam: "
+            + ", ".join(carried_terms)
+        )
+
     active_source = source_name
     if active_source is None and use_active_filter:
         active_source = _source_filter
@@ -1181,11 +1190,13 @@ def answer_question(question, source_name=None, use_active_filter=True):
         result.timings.total_seconds,
     )
     _session_history.add_result(result)
+    _follow_up_context.remember(result.question)
     return True
 
 
 def main():
     _session_history.clear()
+    _follow_up_context.clear()
     print_banner()
     input_manager = CLIInputManager(
         PROJECT_PATHS.history_path,

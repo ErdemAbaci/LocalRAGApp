@@ -188,6 +188,53 @@ soruyu yanıtlıyor mu" diye değil. Retrieval alakasız ama gerçek bir metin
 getirir ve model onu özetlerse cevap dayanaklı çıkar; o durumda tek savunma
 modelin kendi reddidir.
 
+### `app/query_rewrite.py`
+
+Takip sorusunu kendi başına anlaşılır hale getirir ve retrieval'dan **önce**
+çalışır.
+
+Sorun şu: retrieval her soruyu sıfırdan görür, geçmiş diye bir şey bilmez.
+"Kilitlenme nedir?" sorusundan sonra gelen "Peki nasıl önlenir?" sorusunda tek
+bir konu kelimesi yoktur; ne embedding ne BM25 tutunacak bir şey bulur. Sistem
+alakasız bir chunk getirir, kapılar bunu doğru biçimde reddeder ve kullanıcı
+yanlış cevap değil **hiç cevap** alamaz. Eksik olan retrieval değil, sorunun
+bağlamıdır.
+
+Yaygın çözüm geçmişi ve soruyu modele verip "bunu tek başına anlaşılır bir soru
+haline getir" demektir. Bu projede seçilmedi: bu makinede tek bir generation
+5-40 saniye sürüyor, yani en ucuz sorular en çok yavaşlayanlar olurdu, ve çıktı
+deterministik olmadığı için testle sabitlenemezdi.
+
+Bunun yerine mevcut kelime makinesi yeniden kullanıldı. `extract_question_terms()`
+zaten sorunun ayırt edici kelimelerini biliyor; bir soru kendi başına yeterli
+konu kelimesi taşımıyorsa bir önceki sorunun konu kelimeleri sorunun **sonuna
+eklenir**. Kullanıcının yazdığı hiçbir kelime silinmez, yani yeniden yazım
+sorunun anlamını değiştiremez.
+
+Takip sorusu iki kuralla tanınır: hiç konu kelimesi yoksa ("Nasıl önlenir?"),
+veya bir işaret kelimesi varken en fazla bir konu kelimesi kaldıysa ("Bunun
+maliyeti nedir?"). İkinci kuraldaki sınır önemli: "Peki fidye yazılımı nedir?"
+iki konu kelimesiyle kendi başına yeterlidir ve önceki konunun kelimeleri
+eklenirse retrieval bozulur.
+
+Ölçüm — aynı soru, üç farklı konu:
+
+| Hatırlanan konu | "Peki nasıl önlenir?" nereye gidiyor |
+|---|---|
+| (yok) | `isletim_sistemleri.txt` |
+| Kilitlenme nedir? | `isletim_sistemleri.txt` |
+| Fidye yazılımı nedir? | `cybersecurity.txt` |
+| Aşırı öğrenme nedir? | `makine_ogrenmesi.txt` |
+
+Kapı skoru da yükseliyor: `0.4766 -> 0.6534` ve `0.4637 -> 0.7379`.
+
+Kabul edilen sınır: konu takibi son soruya bakar, konu **değişimini** tespit
+etmez. Kullanıcı konuyu değiştirip yine de kısa bir soru sorarsa önceki konunun
+kelimeleri eklenir. Bunun alternatifi olan konu değişimi sezgisi, tam da bu
+modülün kaçındığı belirsiz tahmin işidir. Bu yüzden eklenen kelimeler
+kullanıcıya gösterilir; yanlış bağlam görünür kalır ve soruyu açıkça yazarak
+düzeltilebilir.
+
 ### `app/term_evidence.py`
 
 Sorunun ayırt edici kelimelerinin, modele gidecek context'te gerçekten geçip
@@ -507,6 +554,31 @@ Bu model Türkçe dahil çok dilli metinleri 384 boyutlu sayısal vektörlere d�
 - `embed_texts()`: Birden fazla metni batch halinde embedding'e çevirir.
 
 Ingestion ve retrieval aynı model instance'ını kullanır. Yerel snapshot tercihi, model daha önce indirilmişken gereksiz ağ kontrolünü ve retry loglarını engeller. İlk çağrı yine modelin belleğe alınması nedeniyle sonraki çağrılardan yavaş olabilir.
+
+### `app/reranker.py`
+
+Cross-encoder ile yeniden sıralama. **Varsayılan olarak kapalıdır**
+(`USE_RERANKER = False`) — ölçüldü ve bu korpusta sıralamayı kötüleştirdiği
+görüldü. Tam ölçüm, teşhis ve gerekçe için bölüm 12, madde 4.
+
+Kod silinmedi. Bir negatif sonucun değeri, onu üreten ölçümün tekrar
+edilebilmesindedir; `tools/reranker_analysis.py` ile birlikte bu modül o
+ölçümün kaydıdır. `USE_RERANKER = True` yapmak yeniden açmaya yeter.
+
+İki tasarım kararı, kapalı olmasına rağmen kayda değer:
+
+- **Reranking skoru yalnızca sıralamada kullanılır**, kapıda kullanılmaz.
+  Kapı skoru cosine kalır (`retrieval.gate_score()`), tıpkı hybrid search'ün
+  RRF skorunda olduğu gibi. Aksi halde dört eşik birden ve eval'deki hard
+  negative `max_score` kontrolü yeni bir ölçeğe göre yeniden kalibre edilmek
+  zorunda kalırdı. Tek değişkeni izole tutmak, değişikliğin ölçülebilmesinin
+  ön şartıdır.
+- **Model yüklenemezse sıralama ilk aşamanın sonucunda kalır.** Reranking bir
+  iyileştirmedir, ön şart değil; modelin indirilmemiş olması uygulamayı
+  durdurmamalıdır. Bu sessiz bir düşüş olduğu için `/doctor` bunu görünür
+  kılar (`app/health.check_reranker`), ve o kontrol modeli **yüklemez**,
+  yalnızca cache dizinine bakar — `/doctor` çalıştırmak 1 GB'lık bir modeli
+  belleğe almamalıdır.
 
 ### `app/retrieval.py`
 
@@ -992,14 +1064,22 @@ Her prompt, LLM veya fallback değişikliğinden sonra eval'e ek olarak `python 
 Son eval ve unit test çalışmasında:
 
 ```text
-24 chunk
-3 kaynak dosya
-39/39 eval testi başarılı (bilinen boşluk kalmadı)
-237/237 unit testi başarılı
+217 chunk
+12 kaynak dosya
+124/128 eval testi başarılı
+294/294 unit testi başarılı
 
-Recall@1 = 0.9783   Recall@3 = 1.0000
-Recall@5 = 1.0000   MRR      = 1.0000
+Recall@1 = 0.8973   Recall@3 = 0.9911
+Recall@5 = 0.9911   MRR      = 0.9464
 ```
+
+Kalan 4 başarısız vaka sıralama hatasıdır (doğru kaynak 2. sırada). Reranking
+bunların hedefiydi; ölçüm çözmediğini gösterdi (bölüm 12, madde 4).
+
+Metriklerin daha önce `1.0000` olması daha iyi bir sistem demek değildi: korpus
+24 chunk'ken metrik doygundu ve hiçbir iyileştirmeyi gösteremiyordu, yalnızca
+gerilemeyi gösterebiliyordu. 217 chunk'a çıkınca metrik tavandan indi ve
+**ölçme yeteneği geri kazanıldı.**
 
 Başarılı kontroller:
 
@@ -1137,27 +1217,80 @@ güçlenince kapı sızdırdı ve kapsamayı IDF ile ağırlıklandırmak zorunl
 geldi. Bir iyileştirme başka bir bileşenin varsayımını bozabilir; eval bunu
 yakaladığı için sessiz bir gerileme olmadı.
 
-**4. Reranking**
+**4. Reranking — ölçüldü ve kapatıldı (negatif sonuç)**
 
-Bi-encoder ile geniş aday havuzu çekip cross-encoder ile yeniden sıralamak.
-Cross-encoder soruyu ve chunk'ı birlikte değerlendirdiği için daha doğrudur ama
-önceden hesaplanamaz.
-*Mimari karar: aday sayısı ve kabul edilebilir latency bütçesi.*
+Fikir şu: bi-encoder (mevcut embedding modeli) soruyu ve chunk'ı **ayrı ayrı**
+vektöre çevirir, bu yüzden chunk vektörleri önceden hesaplanıp saklanabilir —
+217 chunk için arama 0.06 saniye. Bedeli, modelin chunk'ı vektöre çevirirken
+sorunun ne olduğunu bilmemesidir. Cross-encoder ikisini **birlikte** okur ve
+tek bir alaka puanı verir; daha isabetlidir ama önceden hesaplanamaz, bu yüzden
+yalnızca küçük bir aday havuzuna uygulanabilir.
 
-**5. Conversation history**
+Kuruldu (`app/reranker.py`), ölçüldü (`tools/reranker_analysis.py`) ve
+**kapatıldı**. 112 etiketli vaka, `bge-reranker-base`:
+
+| ayar | R@1 | MRR | sn/soru |
+|---|---|---|---|
+| kapalı | **0.8973** | **0.9464** | **0.060** |
+| havuz=5 | 0.9018 | 0.9457 | 0.130 |
+| havuz=15 | 0.8393 | 0.9068 | 0.260 |
+| havuz=30 | 0.8214 | 0.8894 | 0.465 |
+
+8 vaka iyileşti, 14 kötüleşti. Havuz büyüdükçe sonuç **monoton** kötüleşiyor;
+bu ayrım önemlidir. Tek bir havuz değerinde bozulma olsaydı "ayar sorunu"
+denebilirdi, ama eğrinin tamamı düşüyorsa sinyalin kendisi zayıf demektir.
+
+Model bozuk değil ve Türkçe sorunu da değil. Doğrudan test edildi:
+"Kilitlenme nedir?" sorusuna doğru tanım cümlesi 0.9992, muzla ilgili alakasız
+bir cümle 0.0000 alıyor. Bozulma gerçek chunk'larda oluyor —
+`ml_train_val_test_split` sorusunda doğru chunk 0.8392 alırken, dağıtık
+sistemlerdeki uzlaşıyla ilgili tamamen alakasız bir chunk 0.9981 alıyor.
+
+Teşhis: bizim chunk'larımız 128 tokenda kesilen **kırıntılar**, kendi başına
+ayakta duran paragraflar değil. (128 embedding modelinin sert sınırıdır;
+reranker 512 okuyabilirdi.) Cross-encoder'lar paragraf seviyesinde alaka için
+eğitilir ve cümlenin ortasında başlayan bir parça onlara yeterli malzeme
+vermiyor.
+
+Denenmemiş iki iyileştirme kayda geçirildi: reranker'a chunk+komşu penceresi
+vermek, ve reranking'i ilk aşamanın yerine koymak yerine RRF ile birleştirmek
+(şu an cross-encoder hybrid sırasını tamamen siliyor, bu yüzden bir vaka
+1. sıradan ilk 5'in dışına düştü). İkisi de yapılmadı çünkü iyileştirilecek
+alan çok dar: `Recall@3` kapalıyken zaten 0.9911.
+
+**Bu maddenin asıl öğreticiliği burada.** "Reranking ekledim, MRR yükseldi"
+demek kütüphane kullanmayı bilmektir; "reranking ekledim, ölçtüm, kötüleştirdi,
+nedenini teşhis ettim ve kapattım" demek mühendisliktir. Pahalı bir bileşenin
+her zaman iyileştirmediğini okuyarak değil ölçerek görmek, bu projenin amacına
+doğrudan hizmet eder. Ayrıca sıralamanın kendini doğruladığı yer de burasıdır:
+eval önce güçlendirildiği için bu kötüleşme **görülebildi**; ölçme yeteneği
+kurulmasaydı cross-encoder eklenir ve iyileştirdiği varsayılırdı.
+
+**5. Conversation history — tamamlandı**
 
 Asıl iş takip sorusunu hatırlamak değil, **query rewriting**'dir. "Peki
 dezavantajları neler?" sorusunun embedding'i hiçbir şeye benzemez; retrieval'ın
 bağımsız (standalone) bir sorgu görmesi gerekir.
-*Mimari karar: rewriting tasarımı ve geçmiş bütçesi.*
+
+Verilen mimari karar: **rewriting kural tabanlıdır, LLM ile yapılmaz.** İkinci
+bir model çağrısı bu makinede her soruya 5-40 saniye ekler ve çıktısı
+deterministik olmadığı için testle sabitlenemez. Kural tabanlı yöntem mevcut
+`extract_question_terms()` makinesini yeniden kullanır ve 17 deterministik
+testle kapsanır. Ayrıntı ve ölçüm: yukarıdaki `app/query_rewrite.py` bölümü.
+
+Geçmiş bütçesi kararı: yalnızca **son** soru hatırlanır, tamamı değil. Konu
+genelde 1-3 kelimedir ve daha uzun bir geçmiş, konu değiştiğinde yanlış
+kelimeleri taşıma riskini büyütür. Hatırlanan şey yeniden yazılmış sorudur;
+böylece zincir üçüncü, dördüncü adımda da sürer.
 
 ### Fırsat buldukça
 
-- **Cevap groundedness kontrolü.** `is_valid_answer()` şu an cevabın biçimini
-  denetliyor (uzunluk, tekrar, etiket), context'e sadakatini değil. Model
-  context'te olmayan bir şey uydurursa mevcut kontroller yakalamaz.
+- **Groundedness'ın kör noktası.** Kontrol "cevap context'e dayanıyor mu" diye
+  sorar, "cevap soruyu yanıtlıyor mu" diye değil. Bu boşluğun cross-encoder ile
+  kapatılması planlanıyordu; 4. maddedeki ölçüm o planı geçersiz kıldı. Aynı
+  model sıralamada alakayı ayırt edemediğine göre kapıda da güvenilmez.
 - **Incremental reindex.** Ancak reindex süresi rahatsız edici hale geldiğinde.
-  Mevcut ölçekte (3 dosya, 24 chunk) çözülecek bir performans problemi yoktur ve
+  Mevcut ölçekte (12 dosya, 217 chunk) çözülecek bir performans problemi yoktur ve
   öğretici tarafının çoğu `app/index_state.py` içinde zaten yazılmıştır.
 - **Ölçekleme deneyi.** Chunk sayısını sentetik olarak artırıp brute force cosine
   aramanın nerede kırıldığını ölçmek. Bu bir vector database migration'ı değil,

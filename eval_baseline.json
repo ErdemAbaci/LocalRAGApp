@@ -1,10 +1,10 @@
 {
   "summary": {
-    "case_count": 71,
-    "recall_at_1": 0.9436619718309859,
-    "recall_at_3": 1.0,
-    "recall_at_5": 1.0,
-    "mrr": 0.971830985915493
+    "case_count": 112,
+    "recall_at_1": 0.8973214285714286,
+    "recall_at_3": 0.9910714285714286,
+    "recall_at_5": 0.9910714285714286,
+    "mrr": 0.9464285714285714
   },
   "hard_negative_scores": {
     "hard_negative_backup_frequency": 0.39646828174591064,

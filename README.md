@@ -13,14 +13,19 @@ yapmaz; mevcut dokumanlardan ilgili parcalari bulup cevaba baglam saglar.
 - Embedding modelinin 128 token sinirina uygun, cumle odakli token-aware chunking
 - Cok dilli, 384 boyutlu yerel embedding modeli
 - SQLite icinde atomik chunk, embedding ve kaynak manifesti yonetimi
-- Cosine similarity ile semantic retrieval
+- Hybrid retrieval: cosine similarity ve elle yazilmis BM25, Reciprocal Rank
+  Fusion ile birlestirilir. Birlesik skor yalnizca siralamada kullanilir; esik
+  skoru cosine kalir.
 - Relevance ile secilen, belge sirasiyla modele verilen context
 - Esik alti komsulari disarida birakan sinirli onceki/sonraki context genisletme
 - Kanita gore `extractive`, `generative` ve `fallback_extractive` cevap modlari
-- Zayif kanitta LLM'i calistirmadan guvenli kapsam disi cevabi
-- Similarity'den bagimsiz kelime kanidi kontrolu: sorunun kelimeleri secilen
-  metinde gecmiyorsa model hic calistirilmaz. Turkce ek ve unsuz yumusamasi
-  (`surec` / `sureci`) dikkate alinir.
+- **Groundedness kontrolu:** uretilen cevap cumle cumle context ile
+  karsilastirilir; dayanaksiz cevap kullaniciya gosterilmez (`ungrounded`).
+- Similarity'den bagimsiz, IDF agirlikli kelime kanidi on kapisi. Turkce ek ve
+  unsuz yumusamasi (`surec` / `sureci`) dikkate alinir.
+- **Takip sorusu cozumleme:** "Peki nasil onlenir?" gibi kendi basina anlamsiz
+  sorulara bir onceki sorunun konu kelimeleri eklenir. Kural tabanlidir; ikinci
+  bir model cagrisi yapmaz ve eklenen kelimeler kullaniciya gosterilir.
 - Kaynak dosya, PDF sayfasi, chunk kimligi ve benzerlik skoru gosterimi
 - Indeks guncelligi, sistem sagligi ve model cache kontrolleri
 - Guvenli dokuman ekleme/silme komutlari
@@ -37,23 +42,34 @@ yapmaz; mevcut dokumanlardan ilgili parcalari bulup cevaba baglam saglar.
 ## RAG Akisi
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["docs/ icindeki TXT ve PDF"] --> B["Metni chunklara ayir"]
     B --> C["Embedding uret"]
     C --> D["SQLite indeksine atomik yaz"]
-    Q["Kullanici sorusu"] --> E["Soru embeddingi"]
-    D --> F["Cosine similarity ile ara"]
-    E --> F
+    Q["Kullanici sorusu"] --> R{"Takip sorusu mu?"}
+    R -- "Evet" --> S["Onceki sorunun konu kelimelerini ekle"]
+    R -- "Hayir" --> F
+    S --> F["Hybrid arama: cosine + BM25, RRF ile birlestir"]
+    D --> F
     F --> G{"Skor yeterli mi?"}
     G -- "Hayir" --> H["Dokumanlarda yok cevabi"]
-    G -- "Evet" --> N{"Soru kelimeleri metinde var mi?"}
+    G -- "Evet" --> N{"Soru bu korpusun konusu mu?"}
     N -- "Hayir" --> H
-    N -- "Guclu ve dogrudan" --> I["Extractive cevap"]
+    N -- "Guclu ve dogrudan kaynak" --> I["Extractive cevap"]
     N -- "Sentez gerekli" --> J["Foundry Local LLM"]
     J --> K{"Cevap gecerli mi?"}
-    K -- "Evet" --> L["Generative cevap"]
     K -- "Hayir" --> M["Kaynak metne fallback"]
+    K -- "Evet" --> O{"Cevap context'e dayaniyor mu?"}
+    O -- "Evet" --> L["Generative cevap"]
+    O -- "Hayir" --> H
 ```
+
+Iki kapinin **farkli sorulara** baktigina dikkat: on kapi *sorunun* kelimelerine
+bakar ve ucuz bir alan filtresidir, groundedness ise *uretilen cevabin* context
+ile ortusmesine bakar. Asil karar ikincisindedir. Bunun gerekcesi olculdu:
+soruya bakan kapi tek basina birakildiginda mesru sorulari reddediyor, cunku
+kullanici soruyu kendi kelimeleriyle sorar, dokuman konuyu kendi kelimeleriyle
+anlatir.
 
 Uygulama yeterli kanit bulamazsa tam olarak su cevabi verir:
 
@@ -70,6 +86,7 @@ Bu bilgi verilen dokümanlarda yok.
 | Yerel LLM | Microsoft Foundry Local, varsayilan `phi-4-mini` |
 | Retrieval | scikit-learn L2 normalization ve NumPy normalized dot product |
 | Hybrid search | Elle yazilmis BM25 + Reciprocal Rank Fusion |
+| Reranking | `BAAI/bge-reranker-base` cross-encoder — **olculdu ve kapatildi** |
 | Veri deposu | SQLite, JSON olarak saklanan embeddingler |
 | PDF okuma | `pypdf` |
 | Terminal arayuzu | `rich`, `prompt-toolkit` |
@@ -206,7 +223,13 @@ Tab aktif secimi tamamlar. Ayni tamamlama sistemi indeksli kaynak adlarini,
 `/debug` degerlerini ve `/add` dosya yollarini da destekler. Yukari/asagi ok ile
 onceki girdiler getirilebilir. Gecmis proje bazinda `data/cli_history` dosyasinda
 yalnizca yerel olarak ve kullaniciya ozel dosya izniyle saklanir. Bu ozellik
-konusma hafizasi degildir; eski sorular modele otomatik context olarak verilmez.
+konusma hafizasi degildir; eski sorular ve cevaplar modele context olarak
+verilmez.
+
+Takip sorulari ise ayri bir mekanizmayla cozulur: bir soru kendi basina yeterli
+konu kelimesi tasimiyorsa, bir onceki sorunun konu kelimeleri **aramaya**
+eklenir ve eklenen kelimeler kullaniciya bildirilir. Modele giden sey yine
+yalnizca guncel soru ve bulunan context'tir.
 
 `/history` ise shell giris gecmisinden farkli olarak yalnizca mevcut uygulama
 oturumunda basariyla tamamlanan RAG sonuclarini tutar. `/repeat` secilen soruyu
@@ -290,33 +313,55 @@ python eval.py --compare
 
 Son dogrulanan durumda:
 
-- `237/237` birim testi basarili
-- `39/39` retrieval, indeks ve cevap karari kontrolu basarili
-- 3 kaynak dosya ve 24 chunk saglikli; maksimum chunk uzunlugu 109 token
+- `294/294` birim testi basarili
+- `124/128` eval vakasi basarili
+- 12 kaynak dosya ve 217 chunk saglikli; maksimum chunk uzunlugu 128 token
 
 | Metrik | Deger |
 |---|---:|
-| Recall@1 | 0.9783 |
-| Recall@3 | 1.0000 |
-| Recall@5 | 1.0000 |
-| MRR | 1.0000 |
+| Recall@1 | 0.8973 |
+| Recall@3 | 0.9911 |
+| Recall@5 | 0.9911 |
+| MRR | 0.9464 |
 
-Yalnizca dense retrieval ile ayni set: `0.7826 / 0.9565 / 0.9565 / 0.8551`.
-Fark hybrid search'ten gelir; `Recall@5` hybrid'den once de `1.0` oldugu icin
-sorun dogru parcayi bulmak degil siralamakti.
+Yalnizca dense retrieval ile ayni set: `0.7183 / 0.8873 / 0.9155 / 0.7998`.
+Fark hybrid search'ten gelir.
 
-Eval seti yalnizca dogru kaynak ve skoru degil, en iyi chunk veya modele giden
-sinirli context icindeki beklenen kavramlari ve kapsam disi sorularin LLM'e
-gonderilmeden reddedilmesini de kontrol eder. Ground truth chunk ID ile degil
-**icerik imzasi** ile etiketlenir; boylece reindex ve chunking degisiklikleri
-etiketleri gecersiz kilmaz.
+Bu metrikler daha once `1.0000`di. **Bu bir gerileme degil.** Korpus 24
+chunk'ken metrik doygundu; doygun bir metrik hicbir iyilestirmeyi gosteremez,
+yalnizca gerilemeyi gosterebilir. Korpus 217 chunk'a cikarilinca metrik
+tavandan indi ve **olcme yetenegi geri kazanildi**. Kalan 4 basarisiz vakanin
+dordunde de dogru kaynak 2. siradadir; bunlar `known_gap` yapilmadi, gorunur
+birakildi.
 
-Ayrica 6 **hard negative** vaka bulunur: konusu dokumana yakin ama cevabi
-dokumanda olmayan sorular. Bunlarin tamami su anda mevcut esigi geciyor ve
-`GAP` olarak raporlanip olculuyor, ancak pass/fail kapisini dusurmuyor. Olcum
-onemli bir siniri gosterdi: cevabi dokumanda bulunmayan bir soru (0.5985),
-cevabi bulunan bir sorudan (0.5570) daha yuksek skor alabiliyor. Bu nedenle
-yanlis pozitif sorunu tek bir esik degeriyle cozulemez.
+Eval seti yalnizca dogru kaynak ve skoru degil, modele giden context icindeki
+beklenen kavramlari ve kapsam disi sorularin reddedilmesini de kontrol eder.
+Ground truth chunk ID ile degil **icerik imzasi** ile etiketlenir; boylece
+reindex ve chunking degisiklikleri etiketleri gecersiz kilmaz.
+
+Ayrica 13 **hard negative** vaka bulunur: konusu dokumana yakin ama cevabi
+dokumanda olmayan sorular. Bunlarin tamami reddediliyor. Olcum onemli bir
+siniri gosterdi: cevabi dokumanda bulunmayan bir soru (0.5985), cevabi bulunan
+bir sorudan (0.5570) daha yuksek skor alabiliyor. Bu nedenle yanlis pozitif
+sorunu tek bir esik degeriyle **cozulemez**; karar cosine esiginde degil
+groundedness kontrolundedir.
+
+### Olcum araclari
+
+`tools/` altindaki betikler uygulamanin parcasi degildir; her biri bir tasarim
+kararinin arkasindaki olcumu tekrar edilebilir kilar.
+
+```bash
+python tools/chunking_analysis.py       # chunk boyutu / overlap
+python tools/hybrid_search_analysis.py  # BM25 k1/b ve RRF_K
+python tools/term_evidence_analysis.py  # kelime kanidi kapisi
+python tools/groundedness_analysis.py   # groundedness esikleri
+python tools/threshold_analysis.py      # similarity/context/extractive esikleri
+python tools/reranker_analysis.py       # cross-encoder yeniden siralama
+```
+
+Projedeki sabitler tahminle degil bu araclarla secildi ve secim gerekcesi
+`app/config.py` icinde olcum tablosu olarak duruyor.
 
 ## Proje Yapisi
 
@@ -330,24 +375,31 @@ yanlis pozitif sorunu tek bir esik degeriyle cozulemez.
 |   |-- database.py        # SQLite semasi ve atomik yazimlar
 |   |-- document_manager.py # Guvenli dokuman ekleme/silme
 |   |-- embeddings.py      # Embedding lazy-load ve cache yonetimi
+|   |-- eval_metrics.py    # Recall@k ve MRR hesabi
+|   |-- groundedness.py    # Uretilen cevabin context'e dayanma olcumu
 |   |-- health.py          # Doctor kontrolleri
 |   |-- index_state.py     # SHA-256 indeks guncelligi
 |   |-- ingest.py          # TXT/PDF okuma ve chunking
 |   |-- llm.py             # Foundry Local ve cevap kalite kontrolu
 |   |-- prompts.py         # Turkce RAG promptu
 |   |-- project.py         # --project ve LOCAL_RAG_HOME yol cozumu
+|   |-- query_rewrite.py   # Takip sorusu tanima ve konu kelimesi tasima
 |   |-- rag_service.py     # Yapilandirilmis RAG sonuc ve karar akisi
+|   |-- reranker.py        # Cross-encoder yeniden siralama (varsayilan kapali)
 |   |-- session.py         # Oturum gecmisi, tekrar verisi ve guvenli export
 |   |-- sparse_search.py   # BM25 skoru ve IDF terim agirliklari
 |   |-- term_evidence.py   # Turkce kelime kanidi ve normalizasyon
 |   `-- retrieval.py       # Cosine similarity, RRF fusion ve siralama
 |-- docs/                  # Indekslenecek kullanici dokumanlari
 |-- tests/                 # Deterministik birim ve entegrasyon testleri
+|-- tools/                 # Olcum betikleri; uygulamanin parcasi degildir
 |-- benchmark_cases.json   # Model benchmark vakalari
 |-- eval_cases.json        # Retrieval regression vakalari
+|-- eval_baseline.json     # Son onaylanan retrieval metrikleri
 |-- eval.py                # Eval calistiricisi
 |-- main.py                # Interaktif ve argparse CLI entrypoint'i
 |-- PROJECT_GUIDE.md       # Ayrintili, ogretici teknik dokumantasyon
+|-- AGENTS.md              # AI agentlar icin proje baglami ve calisma kurallari
 `-- pyproject.toml         # Paket ve local-rag console script tanimi
 ```
 
@@ -369,11 +421,20 @@ yanlis pozitif sorunu tek bir esik degeriyle cozulemez.
   olculur; modelin goremeyecegi kuyruk metni uretilmez.
 - **Context ayrimi:** Chunklar skorla secilir, LLM'e belge sirasiyla verilir;
   en iyi sonuca cok uzak eslesmeler ve esik alti komsular disarida birakilir.
-- **Yanlis ret korumasi:** Retrieval yeterli kanit buldugu halde model
-  `Bu bilgi verilen dokumanlarda yok.` derse cevap gecersiz sayilir. Fallback,
-  soruyla en cok ortusen kaynak cumlelerini secerek guvenli bir cevap verir.
+- **Modelin reddi nihaidir:** Model `Bu bilgi verilen dokumanlarda yok.` derse
+  bu cevap kaynak metniyle degistirilmez. Onceki surumde bunu "yanlis ret" sayan
+  bir koruma vardi; olcum, o korumanin tuzak sorularda modelin **dogru** reddini
+  sildigini gosterdi ve koruma kaldirildi.
 - **Guvenli oturum kaydi:** Yalnizca tamamlanan sonuclar oturum gecmisine girer;
   export kaynak metadata'sini tutar fakat tam chunk metinlerini tasimaz.
+- **Kararlar olculur, tahmin edilmez:** Chunk boyutu, BM25 parametreleri,
+  `RRF_K` ve butun esikler `tools/` altindaki betiklerle olculdu. Her sabitin
+  ustunde onu ureten olcum tablosu yorum olarak duruyor; sihirli sayi
+  birakilmadi.
+- **Negatif sonuclar da kayittir:** Cross-encoder reranking kuruldu, olculdu ve
+  bu korpusta siralamayi **kotulestirdigi** icin kapatildi. Kod, testleri ve
+  olcum araci silinmedi; bir negatif sonucun degeri, onu ureten olcumun tekrar
+  edilebilmesindedir.
 
 Daha ayrintili mimari anlatim ve ogrenme notlari icin
 [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) dosyasina bakabilirsin.
@@ -381,13 +442,22 @@ Daha ayrintili mimari anlatim ve ogrenme notlari icin
 ## Bilinen Sinirlamalar
 
 - Goruntu tabanli PDF'ler icin OCR destegi yoktur.
-- Turkce gramer kalitesi tam olarak otomatik olculemez.
+- **Uretilen Turkce'nin dilbilgisi kalitesi modelin sinirina baglidir.**
+  `phi-4-mini` zaman zaman bozuk cumle kurar ("gurultusunu da oruntu ve
+  ezberlemesiyle"). Bilgi ve kaynak dogru olsa bile cumle bozuk olabilir; bu
+  uygulamanin degil modelin sinirdir ve otomatik olculemez.
+- **Groundedness'in bilinen kor noktasi:** kontrol "cevap context'e dayaniyor
+  mu" diye sorar, "cevap soruyu yanitliyor mu" diye degil. Retrieval alakasiz
+  ama gercek bir metin getirir ve model onu ozetlerse cevap dayanakli cikar.
+- Kalan 4 eval hatasi siralama kaynaklidir; dogru kaynak 2. siradadir.
+  Reranking bunlarin hedefiydi, olculdu ve cozmedigi goruldu.
+- Takip sorusu cozumlemesi kural tabanlidir ve konu **degisimini** tespit etmez.
+  Kullanici konuyu degistirip yine de kisa bir soru sorarsa onceki konunun
+  kelimeleri eklenir; bu yuzden eklenen kelimeler kullaniciya gosterilir.
 - Tum embeddingler arama sirasinda bellege alinir; mevcut yapi kucuk ve orta
   koleksiyonlara yoneliktir.
 - SQLite icinde JSON embedding saklamak V1 ve ogrenme amaci icin uygundur,
   buyuk veri setleri icin vector database gerekebilir.
-- Oturum gecmisi listeleme/tekrar/export icindir; onceki cevaplar henuz modele
-  conversation context olarak verilmez ve takip sorulari cozumlenmez.
 
 ## Yol Haritasi
 
@@ -395,28 +465,35 @@ CLI, indeks yonetimi, eval, model benchmark, kaynak denetimi, proje yolu,
 canli komut menusu, cerceveli giris, klavye kisayollari, streaming cevap,
 guvenli iptal, oturum export'u, token-aware chunking ve komsu context tamamlandi.
 
-Sonraki adimlar retrieval kalitesi ve **bu kaliteyi olcebilme yetenegi**
-uzerinde ilerliyor. Siralamanin mantigi: ilk uc adim olcme yetenegi kazandirir,
-sonrakiler ancak o yetenek varsa dogrulanabilir olur.
+Retrieval kalitesi ve **bu kaliteyi olcebilme yetenegi** uzerine kurulan alti
+maddelik plan tamamlandi. Siralamanin mantigi: ilk maddeler olcme yetenegi
+kazandirir, sonrakiler ancak o yetenek varsa dogrulanabilir olur.
 
 1. ~~**Eval guclendirmesi**~~ — **tamamlandi.** Recall@k ve MRR metrikleri,
-   icerik imzasiyla etiketlenmis ground truth, bozuk etiket tespiti, 6 hard
-   negative vaka ve `--compare` ile baseline karsilastirmasi.
-2. **Chunking karsilastirma deneyi** — mevcut 110/20 disindaki konfigurasyonlari
-   ayni eval setinde olcup secimi olcumle gerekcelendirme.
-3. **Yanlis pozitif savunmasi** — esik kalibrasyonu, terim kanidi ve
-   groundedness sinyali birlikte. Olcum tek basina esik ayarinin yetmedigini
-   gosterdi.
+   icerik imzasiyla etiketlenmis ground truth, bozuk etiket tespiti, hard
+   negative vakalar ve `--compare` ile baseline karsilastirmasi. Eval seti
+   20'den 125 vakaya buyudu.
+2. ~~**Chunking karsilastirma deneyi**~~ — **tamamlandi.** Yedi konfigurasyon
+   indekse dokunmadan olculdu; `CHUNK_SIZE` 110'dan 128'e cikarildi.
+3. ~~**Yanlis pozitif savunmasi**~~ — **tamamlandi.** Karar sorudan cevaba
+   tasindi: kelime kanidi kapisi alan filtresine indirildi ve
+   `app/groundedness.py` eklendi. Esikler ayrica olculdu ve mevcut degerlerinin
+   zaten guvenli oldugu dogrulandi.
 4. ~~**Hybrid search**~~ — **tamamlandi.** Elle yazilmis BM25 ve RRF ile
-   siralama birlestirme. Birlesik skor yalnizca siralamada kullanilir; kapi
-   skoru cosine kalir. `Recall@1` 0.78 -> 0.98, `MRR` 0.86 -> 1.00.
-5. **Reranking** — genis aday havuzunu cross-encoder ile yeniden siralama.
-   Hybrid sonrasi kalan bosluk: `Recall@1 = 0.82`, yani alti vakadan birinde
-   dogru parca halen en ustte degil.
-6. **Conversation history** — takip sorulari icin query rewriting.
+   siralama birlestirme. Birlesik skor yalnizca siralamada kullanilir; esik
+   skoru cosine kalir.
+5. ~~**Reranking**~~ — **olculdu ve kapatildi.** Cross-encoder bu korpusta
+   `MRR`'i 0.9464'ten 0.9068'e dusurdu; 8 vaka iyilesti, 14 kotulesti ve aday
+   havuzu buyudukce sonuc monoton kotulesti. Model bozuk degil (Turkce ayirt
+   etme dogrudan test edildi); teshis, 128 tokenlik chunk'larin paragraf
+   seviyesinde egitilmis bir cross-encoder'a yetmemesidir.
+6. ~~**Conversation history**~~ — **tamamlandi.** Takip sorulari icin kural
+   tabanli query rewriting. LLM ile yeniden yazma, latency ve test
+   edilebilirlik gerekcesiyle reddedildi.
 
-Firsat buldukca: cevap groundedness kontrolu, incremental reindex, brute force
-aramanin sinirini olcen olcekleme deneyi ve OCR destegi.
+Firsat buldukca: incremental reindex, brute force aramanin sinirini olcen
+olcekleme deneyi, OCR destegi ve reranking icin denenmemis iki iyilestirme
+(chunk+komsu penceresi, RRF ile birlestirme).
 
 Kavram aciklamalari ve terim referansi icin
 [`docs/LEARNING_NOTES.md`](docs/LEARNING_NOTES.md).

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app import database
+from app.config import RERANKER_MODEL, USE_RERANKER
 from app.index_state import get_index_freshness
 from app.ingest import DOCS_DIR
 from app.llm import MODEL_ALIAS
@@ -294,11 +295,52 @@ def check_foundry(
     ]
 
 
+def check_reranker(cache_dir=None):
+    """Cross-encoder modelinin indirilmiş olup olmadığını bildirir.
+
+    Model yoksa uygulama çalışmaya devam eder, yalnızca sıralama ilk aşamanın
+    sonucunda kalır (`app/reranker.py`). Bu sessiz bir düşüştür, bu yüzden
+    `/doctor` bunu görünür kılmalıdır; aksi halde kullanıcı reranking'in
+    kapalı olduğunu hiçbir yerde göremez.
+
+    Kontrol modeli **yüklemez**; yalnızca cache dizinine bakar. `/doctor`
+    çalıştırmak 1 GB'lık bir modeli belleğe almamalıdır.
+    """
+    # Kapalı olmak bir sorun değil, ölçülmüş bir karardır: cross-encoder bu
+    # korpusta sıralamayı kötüleştiriyor (`app/config.py` içindeki tablo).
+    # Uyarı, yalnızca "açık ama model yok" durumuna saklanır; her /doctor
+    # çalıştırmasında bilinçli bir kararı uyarı olarak basmak gürültüdür.
+    if not USE_RERANKER:
+        return HealthCheck(
+            name="Yeniden sıralama",
+            status="ok",
+            message="Kapalı; sıralama hybrid search sonucuna dayanıyor.",
+        )
+
+    root = Path(cache_dir) if cache_dir is not None else Path.home() / ".cache" / "huggingface" / "hub"
+    model_dir = root / ("models--" + RERANKER_MODEL.replace("/", "--"))
+
+    if not model_dir.is_dir():
+        return HealthCheck(
+            name="Yeniden sıralama",
+            status="warning",
+            message=f"{RERANKER_MODEL} indirilmemiş; sıralama hybrid sonucunda kalıyor.",
+            solution="İnternete bağlıyken bir soru sor; model bir kez indirilir.",
+        )
+
+    return HealthCheck(
+        name="Yeniden sıralama",
+        status="ok",
+        message=f"{RERANKER_MODEL} cache içinde hazır.",
+    )
+
+
 def run_health_checks(
     docs_dir=None,
     db_path=None,
     foundry_home=None,
     executable_finder=shutil.which,
+    reranker_cache_dir=None,
 ):
     checks = [check_documents(docs_dir=docs_dir)]
     checks.append(check_index_freshness(docs_dir=docs_dir, db_path=db_path))
@@ -309,4 +351,5 @@ def run_health_checks(
             executable_finder=executable_finder,
         )
     )
+    checks.append(check_reranker(cache_dir=reranker_cache_dir))
     return checks

@@ -11,7 +11,16 @@ içindeki ölçüm anlatımlarının ve mimari karar gerekçelerinin tam metnini
 
 ## Güncel Durum — tam ölçüm anlatımı
 
-Son doğrulanan durumda:
+**Bu bölüm bir ölçüm günlüğüdür, durum raporu değildir.** Maddeler yazıldıkları
+andaki korpus ve eval setine aittir ve bilinçli olarak güncellenmez; bir ölçümü
+sonradan düzenlemek, o ölçümün hangi koşullarda yapıldığı bilgisini yok eder.
+Her maddede geçerli olduğu korpus/vaka sayısı yazılıdır.
+
+**Güncel sayılar için tek yetkili kaynak `AGENTS.md` Bölüm 7'dir.** Bir
+maddedeki rakam oradakiyle çelişiyorsa `AGENTS.md` doğrudur ve buradaki rakam
+tarihsel kayıttır.
+
+Kayda geçmiş ölçümler:
 
 - 12 kaynak dosya ve 217 chunk bulunuyor. En uzun chunk özel tokenlar dahil 128 tokendır; bu embedding modelinin sert sınırıdır ve `split_long_text` onu hiç aşmaz.
 - Retrieval, indeks ve cevap kararı değerlendirmesi `39/39` başarılı; bilinen boşluk (`GAP`) kalmadı.
@@ -461,13 +470,102 @@ ayrıntı yukarıdaki Güncel Durum bölümünde. SQLite FTS5 tercih edilmedi:
 seçenekleri `ı/i`, `ş/s` ayrımını bozar; ayrıca `normalize_text()`'ten sapan
 ikinci bir normalizasyon yolu açardı.
 
-## Roadmap madde 4 — Reranking, tam gerekçe
+## Roadmap madde 4 — Reranking, tam kayıt (NEGATİF SONUÇ)
 
-**Reranking.** Geniş aday havuzunu cross-encoder ile yeniden sırala.
-Korpus 217 chunk'a çıkarıldığında metrikler tavandan indi (`MRR` `1.0000` ->
-`0.9783`), yani ölçülecek bir boşluk **artık var**. Ama önce eval seti
-büyütülmelidir: 23 etiketli vakada tek bir vaka `1/23 = 0.043` oynatır ve bu
-gürültü, beklenen reranker kazancından büyüktür. Sıralama şudur:
-önce yeni sekiz doküman için vaka yaz (hedef 60-80 etiketli vaka), sonra
-reranker ekle ve farkı ölç.
-*Mimari karar: aday sayısı ve kabul edilebilir latency bütçesi.*
+**Sonuç: ölçüldü, kötüleştirdi, kapatıldı.** `USE_RERANKER = False`.
+Kod (`app/reranker.py`), testleri (`tests/test_reranker.py`) ve ölçüm aracı
+(`tools/reranker_analysis.py`) repoda duruyor. Silme; negatif sonucun değeri
+ölçümün tekrar edilebilmesindedir.
+
+### Ön şart nasıl karşılandı
+
+İlk planda not düşülmüştü: 23 etiketli vakada tek bir vaka `1/23 = 0.043`
+oynatır ve bu gürültü beklenen reranker kazancından büyüktür. Bu yüzden önce
+eval seti 112 etiketli vakaya çıkarıldı; tek vakanın etkisi `0.009`'a indi.
+Ancak bundan sonra ölçüm anlamlı hale geldi.
+
+### Ölçüm
+
+`tools/reranker_analysis.py`, 112 etiketli vaka, 217 chunk,
+`BAAI/bge-reranker-base` (XLM-RoBERTa base, 278M parametre):
+
+| ayar | R@1 | R@3 | R@5 | MRR | sn/soru |
+|---|---|---|---|---|---|
+| kapalı | **0.8973** | 0.9911 | 0.9911 | **0.9464** | 0.060 |
+| havuz=5 | 0.9018 | 0.9821 | 0.9911 | 0.9457 | 0.130 |
+| havuz=10 | 0.8393 | 0.9732 | 0.9821 | 0.9085 | 0.193 |
+| havuz=15 | 0.8393 | 0.9554 | 0.9911 | 0.9068 | 0.260 |
+| havuz=20 | 0.8393 | 0.9554 | 0.9821 | 0.9046 | 0.325 |
+| havuz=30 | 0.8214 | 0.9375 | 0.9732 | 0.8894 | 0.465 |
+
+8 vaka iyileşti, 14 vaka kötüleşti.
+
+**Monotonluk kritik bir ayrımdır.** Tek bir havuz değerinde bozulma olsaydı
+"ayar sorunu" denebilir ve tarama sürdürülebilirdi. Eğrinin tamamı düşüyorsa
+sinyalin kendisi zayıf demektir ve tarama sürdürmek zaman kaybıdır.
+`havuz=5`'te `R@1`'in hafifçe yükselmesi (0.8973 -> 0.9018) tek başına gürültü
+sınırındadır ve `MRR` aynı noktada düşmüştür.
+
+### Modelin bozuk olmadığı nasıl doğrulandı
+
+Negatif sonucu raporlamadan önce "acaba bende bir hata mı var" sorusu
+kapatılmalıydı. Model doğrudan test edildi:
+
+| soru | metin | skor |
+|---|---|---|
+| Kilitlenme nedir? | doğru tanım cümlesi | 0.9992 |
+| Kilitlenme nedir? | muzun potasyum içerdiği | 0.0000 |
+| What is a deadlock? | doğru İngilizce tanım | 0.8308 |
+| What is a deadlock? | muz cümlesi | 0.0000 |
+
+Yani model Türkçede ayırt ediyor ve entegrasyon doğru. Bozulma yalnızca gerçek
+chunk'larda oluyor. `ml_train_val_test_split` sorusunda doğru chunk 0.8392
+alırken, dağıtık sistemlerdeki uzlaşıyla ilgili tamamen alakasız bir chunk
+0.9981 alıyor. `phrasing_db_query_optimization_myth` sorusunda doğru chunk
+0.0028 alıyor.
+
+### Teşhis
+
+Chunk'larımız 128 tokenda kesilen **kırıntılar**, kendi başına ayakta duran
+paragraflar değil. 128 embedding modelinin sert sınırıdır; cross-encoder 512
+token okuyabilirdi, yani ona gereksiz yere elimizin körü veriliyor.
+Cross-encoder'lar paragraf seviyesinde alaka için eğitilir ve cümlenin
+ortasında başlayan bir parça yeterli malzeme vermiyor.
+
+### Denenmemiş iki iyileştirme
+
+Teşhisin işaret ettiği yönde, yapılmadı:
+
+1. **Reranker'a chunk+komşu penceresi ver.** Komşular zaten
+   `NEIGHBOR_CHUNK_RADIUS` ile alınıyor, sadece modele geçirilmiyor.
+2. **Reranking'i RRF ile birleştir.** Şu an cross-encoder ilk aşamanın sırasını
+   **tamamen siliyor**; bu yüzden `phrasing_db_query_optimization_myth` 1.
+   sıradan ilk 5'in dışına düştü. Hybrid'in kararı iyi (`MRR` 0.9464), onu
+   silmek yerine birleştirmek felaket düşüşleri engellerdi — tıpkı BM25 ile
+   cosine'i birleştirdiğimiz gibi.
+
+Yapılmama gerekçesi: iyileştirilecek alan çok dar. `Recall@3` kapalıyken
+0.9911, yani reranking'in kazanabileceği en fazla şey eval'de kalan 4 vakadır
+(%3) ve gerçekçi beklenti bunun yarısıdır. Bu kazanç için 1-2 GB model, her
+soruya +0.2-1 saniye ve bakımı olan bir bileşen taşınıyor.
+
+### Genel dersler
+
+- **Pahalı bileşen her zaman iyileştirmez.** Bu, RAG'de en sık yapılan
+  hatalardan biridir ve burada okuyarak değil ölçerek görüldü.
+- **Sıra kendini doğruladı.** Eval önce güçlendirildiği için bu kötüleşme
+  görülebildi. Ölçme yeteneği kurulmasaydı cross-encoder eklenir ve
+  iyileştirdiği varsayılırdı — literatür de öyle söylüyor.
+- **Negatif sonucu tek modele dayandırmamaya çalış, ama maliyetini de gör.**
+  `bge-reranker-v2-m3` (568M, 2.1 GB) ikinci kanıt için indirildi ve ölçüm
+  başlatıldı; makine ısındığı için durduruldu. Ölçüm yükü gerçek kullanım
+  yükünün yüzlerce katıdır (112 soru × 5 ayar, kesintisiz), bunu planlarken
+  hesaba kat. İkinci model diskte duruyor; küçük ölçekli bir doğrulama
+  (tek havuz, 30 vaka) hâlâ yapılabilir.
+- **Bayrağın varsayılanına bağlı test yazma.** `USE_RERANKER` kapatıldığında
+  6 test kırıldı; hepsi bayrağın açık olduğunu varsayıyordu. Testler artık
+  `use_reranker=True`'yu açıkça geçiyor.
+- **Kapalı olmak arıza değildir.** `/doctor` içinde `USE_RERANKER = False`
+  durumu `ok` olarak raporlanır; ölçülmüş bir kararı her çalıştırmada uyarı
+  olarak basmak gürültüdür. Uyarı yalnızca "açık ama model indirilmemiş"
+  durumuna saklanır.
